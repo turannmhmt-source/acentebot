@@ -1,0 +1,8 @@
+config.py
+gecici/
+data/
+__pycache__/
+*.pyc
+*.pyo
+*.log
+.env
