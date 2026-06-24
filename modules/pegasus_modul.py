@@ -1,15 +1,19 @@
-import time
+"""
+pegasus_modul.py — Pegasus acente otomasyonu
+Fonksiyonlar: giris_baslat, otp_gir, ucus_sorgula, paket_sec, yolcu_doldur, rezervasyon_bilgisi_al
+"""
+
 import re
+import time
+import random
+import os
 from modules.logger import get_logger
-from modules.tarayici import insan_gibi_bekle, hata_screenshot
 
 log = get_logger("pegasus")
 
 PEGASUS_URL = "https://acente.flypgs.com/"
 PEGASUS_ANA_URL = "https://acente.flypgs.com/MemberRezvEntry.jsp"
-ACENTE_TEL_ALAN = "555"
-ACENTE_TEL_NO = "0094805"
-ACENTE_EMAIL = "masaraturizm@gmail.com"
+GECICI_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "gecici")
 
 SEHIR_ARAMA = {
     "IST": "İstanbul Tümü",
@@ -41,256 +45,211 @@ PAKET_ICERIKLERI = {
     "Comfort Flex": "Koltuk altı çanta, Kabin bagaj, 20kg bagaj, Esnek değişiklik, Koltuk seçimi",
 }
 
+ACENTE_TEL_ALAN = "555"
+ACENTE_TEL_NO = "0094805"
+ACENTE_EMAIL = "masaraturizm@gmail.com"
 
-def _yeni_sayfa_ac(tarayici):
+
+def _bekle(mn=1.0, mx=2.5):
+    time.sleep(random.uniform(mn, mx))
+
+
+def _ss(sayfa, ad: str) -> str:
+    os.makedirs(GECICI_DIR, exist_ok=True)
+    from datetime import datetime
+    dosya = os.path.join(GECICI_DIR, f"{ad}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png")
     try:
+        sayfa.screenshot(path=dosya, full_page=True)
+        log.info(f"Screenshot: {dosya}")
+    except Exception as e:
+        log.warning(f"Screenshot hatası: {e}")
+    return dosya
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 1. GİRİŞ
+# ─────────────────────────────────────────────────────────────────────────────
+
+def pegasus_giris_baslat(tarayici) -> tuple:
+    """
+    Pegasus giriş sayfasını açar, kimlik bilgilerini doldurur,
+    Enter ile submit eder ve SMS kodunu bekler.
+    Döner: (konteks, sayfa) veya (None, None)
+    """
+    import config as cfg
+    sayfa = None
+    konteks = None
+    try:
+        # Yeni context aç
         konteks = tarayici.new_context(
             viewport={"width": 1920, "height": 1080},
             user_agent=(
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/120.0.0.0 Safari/537.36"
-            )
+                "Chrome/124.0.0.0 Safari/537.36"
+            ),
         )
         sayfa = konteks.new_page()
-        log.info("Yeni context açıldı")
-        return konteks, sayfa
-    except Exception as e:
-        log.warning(f"new_context hatası: {e}")
-
-    try:
-        if hasattr(tarayici, 'new_page'):
-            konteks = tarayici
-            sayfa = konteks.new_page()
-            log.info("Persistent context kullanıldı")
-            return konteks, sayfa
-    except Exception as e:
-        log.warning(f"persistent new_page hatası: {e}")
-
-    try:
-        if hasattr(tarayici, 'contexts') and tarayici.contexts:
-            konteks = tarayici.contexts[0]
-            sayfa = konteks.new_page()
-            log.info("Mevcut context kullanıldı")
-            return konteks, sayfa
-    except Exception as e:
-        log.warning(f"Mevcut context hatası: {e}")
-
-    raise Exception("Sayfa açılamadı")
-
-
-def pegasus_giris_baslat(tarayici) -> tuple:
-    sayfa = None
-    konteks = None
-    try:
-        import config as cfg
-
-        konteks, sayfa = _yeni_sayfa_ac(tarayici)
-
         log.info("Pegasus açılıyor...")
+
+        # Sayfayı aç — domcontentloaded yeterli, networkidle bekleme
         sayfa.goto(PEGASUS_URL, wait_until="domcontentloaded", timeout=30000)
-        insan_gibi_bekle(2, 3)
+        _bekle(2, 3)
 
-        # USERNAME alanı görünene kadar bekle (sayfanın JS'i yüklemesi için)
-        try:
-            sayfa.wait_for_selector(
-                "input[name='USERNAME']",
-                timeout=20000,
-                state="visible"
-            )
-        except Exception as e:
-            log.error(f"USERNAME alanı bulunamadı: {e}")
-            hata_screenshot(sayfa, "pegasus_username_yok")
-            return None, None
+        # USERNAME alanı görünene kadar bekle
+        log.info("USERNAME bekleniyor...")
+        sayfa.wait_for_selector("input[name='USERNAME']", state="visible", timeout=20000)
+        log.info(f"Sayfa yüklendi: {sayfa.url}")
 
-        log.info(f"URL: {sayfa.url}")
-
-        # Kullanıcı adı
+        # Kullanıcı adı ve şifre doldur
         sayfa.fill("input[name='USERNAME']", cfg.PEGASUS_KULLANICI)
-        insan_gibi_bekle(0.5, 1)
-        log.info(f"Kullanıcı adı: {cfg.PEGASUS_KULLANICI}")
-
-        # Şifre
+        _bekle(0.5, 1.0)
         sayfa.fill("input[name='PASSWORD']", cfg.PEGASUS_SIFRE)
-        insan_gibi_bekle(0.5, 1)
-        log.info("Şifre dolduruldu")
+        _bekle(0.5, 1.0)
+        log.info(f"Kimlik dolduruldu: {cfg.PEGASUS_KULLANICI}")
 
-        # Mevcut butonları logla (debug)
-        butonlar = sayfa.query_selector_all("button")
-        log.info(f"{len(butonlar)} buton bulundu:")
-        for b in butonlar:
-            try:
-                log.info(f"  → '{b.inner_text().strip()}'")
-            except:
-                pass
+        _ss(sayfa, "01_kimlik_doldu")
 
-        tiklandi = False
+        # Enter ile submit — buton aramadan
+        sayfa.press("input[name='PASSWORD']", "Enter")
+        log.info("Enter basıldı — submit bekleniyor...")
+        _bekle(3, 5)
 
-        # Yöntem 1: Password alanında Enter bas (en güvenilir — form submit)
-        if not tiklandi:
-            try:
-                sayfa.press("input[name='PASSWORD']", "Enter")
-                insan_gibi_bekle(2, 3)
-                # OTP ekranı veya farklı bir sayfa açıldıysa başarılı say
-                if "OTP" in sayfa.url or sayfa.query_selector("input[name='OTP_INPUT']"):
-                    tiklandi = True
-                    log.info("Yöntem 1: Enter ile submit ✅")
-                else:
-                    # Sayfa değişti mi kontrol et
-                    tiklandi = sayfa.url != PEGASUS_URL
-                    if tiklandi:
-                        log.info(f"Yöntem 1: Enter çalıştı, yeni URL: {sayfa.url} ✅")
-            except Exception as e:
-                log.warning(f"Yöntem 1 (Enter): {e}")
+        _ss(sayfa, "02_enter_sonrasi")
 
-        # Yöntem 2: Frame'lerde buton ara
-        if not tiklandi:
-            try:
-                tum_frameler = sayfa.frames
-                log.info(f"{len(tum_frameler)} frame bulundu")
-                for frame in tum_frameler:
-                    try:
-                        btn = frame.query_selector("button:has-text('Üye Girişi')")
-                        if not btn:
-                            btn = frame.query_selector("input[type='submit']")
-                        if btn and btn.is_visible():
-                            btn.click()
-                            tiklandi = True
-                            log.info("Yöntem 2: Frame içinde buton tıklandı ✅")
-                            break
-                    except:
-                        continue
-            except Exception as e:
-                log.warning(f"Yöntem 2 (frame): {e}")
-
-        # Yöntem 3: Ana sayfada metin ile ara
-        if not tiklandi:
-            try:
-                btn = sayfa.query_selector("button:has-text('Üye Girişi')")
-                if btn and btn.is_visible():
-                    btn.click()
-                    tiklandi = True
-                    log.info("Yöntem 3: Ana sayfada buton tıklandı ✅")
-            except Exception as e:
-                log.warning(f"Yöntem 3 (metin): {e}")
-
-        # Yöntem 4: JavaScript — tüm tıklanabilir elementleri tara
-        if not tiklandi:
-            try:
-                sonuc = sayfa.evaluate("""
-                    () => {
-                        const elems = Array.from(
-                            document.querySelectorAll('button, input[type=submit], a, div[onclick], span[onclick]')
-                        );
-                        for (let el of elems) {
-                            const t = (el.textContent || el.value || el.innerText || '').trim();
-                            if (t.includes('ye Giri') || t.includes('Üye') || t.includes('Login')) {
-                                el.click();
-                                return t;
-                            }
-                        }
-                        return null;
-                    }
-                """)
-                if sonuc:
-                    tiklandi = True
-                    log.info(f"Yöntem 4: JS tıklandı ✅: {sonuc}")
-            except Exception as e:
-                log.warning(f"Yöntem 4 (JS): {e}")
-
-        # Yöntem 5: Tab + Enter klavye navigasyonu
-        if not tiklandi:
-            try:
-                sayfa.focus("input[name='PASSWORD']")
-                insan_gibi_bekle(0.3, 0.5)
-                for _ in range(5):
-                    sayfa.keyboard.press("Tab")
-                    insan_gibi_bekle(0.2, 0.3)
-                    focused = sayfa.evaluate("() => document.activeElement?.tagName")
-                    if focused in ("BUTTON", "INPUT", "A"):
-                        sayfa.keyboard.press("Enter")
-                        tiklandi = True
-                        log.info(f"Yöntem 5: Tab+Enter ✅ (element: {focused})")
-                        break
-            except Exception as e:
-                log.warning(f"Yöntem 5 (Tab+Enter): {e}")
-
-        # Yöntem 6: Form submit JS
-        if not tiklandi:
-            try:
-                sonuc = sayfa.evaluate("""
-                    () => {
-                        const form = document.querySelector('form');
-                        if (form) { form.submit(); return true; }
-                        return false;
-                    }
-                """)
-                if sonuc:
-                    tiklandi = True
-                    log.info("Yöntem 6: form.submit() ✅")
-            except Exception as e:
-                log.warning(f"Yöntem 6 (form submit): {e}")
-
-        if not tiklandi:
-            log.error("Üye Girişi butonu bulunamadı — tüm yöntemler başarısız")
-            hata_screenshot(sayfa, "pegasus_buton_yok")
-            return None, None
-
-        insan_gibi_bekle(3, 5)
-        hata_screenshot(sayfa, "pegasus_giris_sonrasi")
-
-        # OTP ekranı
+        # OTP alanı görünmezse buton yöntemini dene
         try:
-            sayfa.wait_for_selector(
-                "input[name='OTP_INPUT']",
-                timeout=15000,
-                state="visible"
-            )
+            sayfa.wait_for_selector("input[name='OTP_INPUT']", state="visible", timeout=10000)
             log.info("OTP ekranı açıldı ✅")
         except Exception:
-            log.error("OTP ekranı açılmadı")
-            hata_screenshot(sayfa, "pegasus_otp_yok")
-            return None, None
+            log.warning("OTP direkt açılmadı, buton aranıyor...")
+            _buton_tikla(sayfa)
+            _bekle(3, 5)
+            sayfa.wait_for_selector("input[name='OTP_INPUT']", state="visible", timeout=15000)
+            log.info("OTP ekranı açıldı ✅")
 
         # SMS Gönder
         try:
-            sms = sayfa.query_selector("button:has-text('SMS Gönder')")
-            if sms and sms.is_visible():
-                sms.click()
+            sms_btn = sayfa.query_selector("button:has-text('SMS Gönder')")
+            if sms_btn and sms_btn.is_visible():
+                sms_btn.click()
                 log.info("SMS Gönder tıklandı ✅")
-                insan_gibi_bekle(2, 3)
+                _bekle(2, 3)
         except Exception as e:
-            log.warning(f"SMS buton hatası: {e}")
+            log.warning(f"SMS butonu: {e}")
 
-        hata_screenshot(sayfa, "pegasus_otp_ekrani")
-        log.info("SMS gönderildi — kod bekleniyor")
+        _ss(sayfa, "03_sms_gonderildi")
+        log.info("SMS gönderildi — OTP bekleniyor")
         return konteks, sayfa
 
     except Exception as e:
-        log.error(f"Pegasus giriş hatası: {e}")
+        log.error(f"Giriş hatası: {e}")
         if sayfa:
-            hata_screenshot(sayfa, "pegasus_hata")
+            _ss(sayfa, "hata_giris")
         return None, None
 
 
-def pegasus_otp_gir(konteks, sayfa, otp_kodu: str):
+def _buton_tikla(sayfa) -> bool:
+    """Üye Girişi butonunu birden fazla yöntemle tıklamayı dener."""
+    # Yöntem 1: Metin ile
     try:
-        log.info(f"OTP giriliyor: {otp_kodu}")
-        sayfa.fill("input[name='OTP_INPUT']", otp_kodu.strip())
-        insan_gibi_bekle(0.5, 1)
+        btn = sayfa.query_selector("button:has-text('Üye Girişi')")
+        if btn and btn.is_visible():
+            btn.click()
+            log.info("Buton (metin) tıklandı ✅")
+            return True
+    except Exception:
+        pass
+
+    # Yöntem 2: submit input
+    try:
+        btn = sayfa.query_selector("input[type='submit']")
+        if btn and btn.is_visible():
+            btn.click()
+            log.info("Buton (submit input) tıklandı ✅")
+            return True
+    except Exception:
+        pass
+
+    # Yöntem 3: JavaScript — tüm buton benzeri elementler
+    try:
+        sonuc = sayfa.evaluate("""
+            () => {
+                const elems = Array.from(document.querySelectorAll(
+                    'button, input[type=submit], a[href], div[onclick], span[onclick]'
+                ));
+                for (const el of elems) {
+                    const t = (el.textContent || el.value || '').trim().toLowerCase();
+                    if (t.includes('giri') || t.includes('login')) {
+                        el.click();
+                        return t;
+                    }
+                }
+                return null;
+            }
+        """)
+        if sonuc:
+            log.info(f"Buton (JS) tıklandı ✅: {sonuc}")
+            return True
+    except Exception:
+        pass
+
+    # Yöntem 4: Tab + Enter
+    try:
+        sayfa.focus("input[name='PASSWORD']")
+        for _ in range(5):
+            sayfa.keyboard.press("Tab")
+            _bekle(0.2, 0.3)
+            tag = sayfa.evaluate("() => document.activeElement?.tagName || ''")
+            if tag in ("BUTTON", "A"):
+                sayfa.keyboard.press("Enter")
+                log.info(f"Buton (Tab+Enter, {tag}) tıklandı ✅")
+                return True
+    except Exception:
+        pass
+
+    # Yöntem 5: form.submit()
+    try:
+        ok = sayfa.evaluate("() => { const f = document.querySelector('form'); if(f){f.submit();return true;} return false; }")
+        if ok:
+            log.info("form.submit() ✅")
+            return True
+    except Exception:
+        pass
+
+    log.error("Buton tıklanamadı — tüm yöntemler başarısız")
+    return False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 2. OTP
+# ─────────────────────────────────────────────────────────────────────────────
+
+def pegasus_otp_gir(konteks, sayfa, otp_kodu: str):
+    """
+    OTP kodunu girer, 'Giriş yap' butonuna basar,
+    açılan yeni pencereyi döner. Başarısızsa None.
+    """
+    try:
+        # SMS metninden kodu çıkar: "...aktivasyon kodunuz fxop 'dir"
+        kod = _otp_cikart(otp_kodu)
+        log.info(f"OTP: {kod}")
+
+        sayfa.fill("input[name='OTP_INPUT']", kod)
+        _bekle(0.5, 1.0)
 
         with konteks.expect_page(timeout=30000) as yeni_bilgi:
             sayfa.click("button:has-text('Giriş yap')")
 
         yeni_sayfa = yeni_bilgi.value
-        yeni_sayfa.wait_for_load_state("networkidle", timeout=30000)
-        insan_gibi_bekle(3, 5)
+        yeni_sayfa.wait_for_load_state("domcontentloaded", timeout=30000)
+        _bekle(3, 5)
 
         log.info(f"Yeni pencere: {yeni_sayfa.url}")
-        hata_screenshot(yeni_sayfa, "pegasus_ana_ekran")
+        _ss(yeni_sayfa, "04_ana_ekran")
 
         if "acente.flypgs.com" in yeni_sayfa.url:
-            log.info("Pegasus ana ekranı açıldı ✅")
+            log.info("Ana ekran açıldı ✅")
             return yeni_sayfa
         else:
             log.error(f"Beklenmeyen URL: {yeni_sayfa.url}")
@@ -299,14 +258,44 @@ def pegasus_otp_gir(konteks, sayfa, otp_kodu: str):
     except Exception as e:
         log.error(f"OTP hatası: {e}")
         if sayfa:
-            hata_screenshot(sayfa, "pegasus_otp_hata")
+            _ss(sayfa, "hata_otp")
         return None
 
 
-def pegasus_ucus_sorgula(sayfa, komut: dict) -> list:
-    try:
-        import config as cfg
+def _otp_cikart(metin: str) -> str:
+    """
+    SMS metninden OTP kodunu çıkarır.
+    Örnek: "A297TQ34 ile login için aktivasyon kodunuz fxop 'dir"
+    → "fxop"
+    Düz sayı/harf kodu da desteklenir: "1234" → "1234"
+    """
+    metin = metin.strip()
 
+    # "kodunuz XXXX 'dir" veya "kodunuz XXXX." kalıbı
+    eslesme = re.search(r"kodunuz\s+([A-Za-z0-9]+)", metin, re.IGNORECASE)
+    if eslesme:
+        return eslesme.group(1)
+
+    # Sadece sayı/harf kombinasyonu (4-8 karakter)
+    eslesme = re.search(r"\b([A-Za-z0-9]{4,8})\b", metin)
+    if eslesme:
+        return eslesme.group(1)
+
+    # Hiçbiri yoksa ham metni döndür
+    return metin
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 3. UÇUŞ SORGULAMA
+# ─────────────────────────────────────────────────────────────────────────────
+
+def pegasus_ucus_sorgula(sayfa, komut: dict) -> list:
+    """
+    Ana ekranda form doldurur, uçuş listesini döner.
+    komut = {tip, nereden, nereye, tarih, yetiskin, cocuk, bebek, direkt_mi}
+    """
+    import config as cfg
+    try:
         tip = komut.get("tip", "tek_yon")
         nereden = komut.get("nereden", "IST")
         nereye = komut.get("nereye", "")
@@ -315,62 +304,65 @@ def pegasus_ucus_sorgula(sayfa, komut: dict) -> list:
         bebek = komut.get("bebek", 0)
         direkt_mi = komut.get("direkt_mi", True)
 
-        log.info(f"Sorgu: {nereden}→{nereye} tip={tip}")
+        log.info(f"Sorgu: {nereden}→{nereye} {tip}")
 
-        sayfa.goto(PEGASUS_ANA_URL, wait_until="networkidle", timeout=30000)
-        insan_gibi_bekle(2, 3)
+        sayfa.goto(PEGASUS_ANA_URL, wait_until="domcontentloaded", timeout=30000)
+        _bekle(2, 3)
 
+        # Uçuş tipi
         if tip == "tek_yon":
             try:
                 sayfa.click("a:has-text('Tek Yön'), li:has-text('Tek Yön')")
-                insan_gibi_bekle(1, 2)
-            except:
+                _bekle(1, 2)
+            except Exception:
                 pass
         elif tip == "gidis_donus":
             try:
                 sayfa.click("a:has-text('Gidiş - Dönüş')")
-                insan_gibi_bekle(1, 2)
-            except:
+                _bekle(1, 2)
+            except Exception:
                 pass
 
         _sehir_sec(sayfa, nereden, "nereden")
-        insan_gibi_bekle(1, 2)
+        _bekle(1, 2)
         _sehir_sec(sayfa, nereye, "nereye")
-        insan_gibi_bekle(1, 2)
+        _bekle(1, 2)
 
         if tip == "tek_yon":
             _tarih_sec(sayfa, komut.get("tarih", ""), "gidis")
         else:
             _tarih_sec(sayfa, komut.get("gidis_tarihi", ""), "gidis")
-            insan_gibi_bekle(0.5, 1)
+            _bekle(0.5, 1)
             _tarih_sec(sayfa, komut.get("donus_tarihi", ""), "donus")
-        insan_gibi_bekle(1, 2)
+        _bekle(1, 2)
 
         _yolcu_sec(sayfa, yetiskin, cocuk, bebek)
-        insan_gibi_bekle(1, 2)
+        _bekle(1, 2)
 
         sayfa.click("button:has-text('Ara'), input[value='Ara']")
-        insan_gibi_bekle(3, 5)
+        _bekle(3, 5)
 
+        # Uyarı popup
         try:
             sayfa.wait_for_selector("button:has-text('Devam')", timeout=6000)
             sayfa.click("button:has-text('Devam')")
-            log.info("Uyarı popup geçildi")
-            insan_gibi_bekle(3, 5)
-        except:
+            log.info("Popup geçildi")
+            _bekle(3, 5)
+        except Exception:
             pass
 
+        # Sonuç sayfası
         try:
             sayfa.wait_for_url("**/MemberRezvResults**", timeout=30000)
-        except:
+        except Exception:
             sayfa.wait_for_load_state("networkidle", timeout=20000)
 
-        insan_gibi_bekle(3, 5)
+        _bekle(3, 5)
         return _sonuclari_oku(sayfa, nereden, nereye, direkt_mi, cfg)
 
     except Exception as e:
         log.error(f"Uçuş sorgulama hatası: {e}")
-        hata_screenshot(sayfa, "pegasus_sorgula_hata")
+        _ss(sayfa, "hata_sorgula")
         return []
 
 
@@ -385,19 +377,15 @@ def _sehir_sec(sayfa, iata: str, tip: str):
         sayfa.wait_for_selector(sel, timeout=10000)
         sayfa.fill(sel, "")
         sayfa.type(sel, arama, delay=100)
-        insan_gibi_bekle(1, 2)
+        _bekle(1, 2)
 
         try:
-            dd = (
-                "[class*='suggestion'] li:first-child, "
-                "[class*='autocomplete'] li:first-child, "
-                "ul[class*='auto'] li:first-child"
-            )
+            dd = "[class*='suggestion'] li:first-child, [class*='autocomplete'] li:first-child, ul[class*='auto'] li:first-child"
             sayfa.wait_for_selector(dd, timeout=5000)
             sayfa.click(dd)
-        except:
+        except Exception:
             sayfa.keyboard.press("ArrowDown")
-            insan_gibi_bekle(0.3, 0.5)
+            _bekle(0.3, 0.5)
             sayfa.keyboard.press("Enter")
 
         log.info(f"Şehir: {arama} ({tip})")
@@ -418,38 +406,33 @@ def _tarih_sec(sayfa, tarih: str, tip: str):
         else:
             sel = "input[id*='return'], input[name*='return'], input[placeholder*='Dönüş']"
         sayfa.click(sel)
-        insan_gibi_bekle(1, 2)
+        _bekle(1, 2)
         _takvim_sec(sayfa, gun, ay, yil)
     except Exception as e:
         log.warning(f"Tarih hatası ({tip}): {e}")
 
 
 def _takvim_sec(sayfa, gun: int, ay: int, yil: int):
-    AYLAR = {
-        1: "Ocak", 2: "Şubat", 3: "Mart", 4: "Nisan",
-        5: "Mayıs", 6: "Haziran", 7: "Temmuz", 8: "Ağustos",
-        9: "Eylül", 10: "Ekim", 11: "Kasım", 12: "Aralık"
-    }
+    AYLAR = {1:"Ocak",2:"Şubat",3:"Mart",4:"Nisan",5:"Mayıs",6:"Haziran",
+              7:"Temmuz",8:"Ağustos",9:"Eylül",10:"Ekim",11:"Kasım",12:"Aralık"}
     try:
         for _ in range(24):
-            insan_gibi_bekle(0.5, 1)
+            _bekle(0.5, 1)
             baslik = sayfa.query_selector(
-                "[class*='calendar-caption'], th[class*='month'], "
-                "[class*='datepicker-title']"
+                "[class*='calendar-caption'], th[class*='month'], [class*='datepicker-title']"
             )
             if not baslik:
                 break
             metin = baslik.inner_text()
-            mevcut_ay = None
-            mevcut_yil = None
+            m_ay = m_yil = None
             for no, ad in AYLAR.items():
                 if ad in metin:
-                    mevcut_ay = no
+                    m_ay = no
                     y = re.search(r'\d{4}', metin)
                     if y:
-                        mevcut_yil = int(y.group())
+                        m_yil = int(y.group())
                     break
-            if mevcut_ay == ay and mevcut_yil == yil:
+            if m_ay == ay and m_yil == yil:
                 gunler = sayfa.query_selector_all(
                     "[class*='calendar'] td:not([class*='disabled']):not([class*='empty']), "
                     "[class*='datepicker'] td:not([class*='disabled'])"
@@ -460,11 +443,8 @@ def _takvim_sec(sayfa, gun: int, ay: int, yil: int):
                         log.info(f"Tarih: {gun}.{ay}.{yil}")
                         return
             try:
-                sayfa.click(
-                    "[class*='calendar'] [class*='next'], "
-                    "th[class*='next'], button:has-text('>')"
-                )
-            except:
+                sayfa.click("[class*='calendar'] [class*='next'], th[class*='next'], button:has-text('>')")
+            except Exception:
                 break
     except Exception as e:
         log.warning(f"Takvim hatası: {e}")
@@ -473,29 +453,20 @@ def _takvim_sec(sayfa, gun: int, ay: int, yil: int):
 def _yolcu_sec(sayfa, yetiskin: int, cocuk: int, bebek: int):
     try:
         try:
-            sayfa.select_option(
-                "select[id*='adult'], select[name*='adult']",
-                label=f"{yetiskin} Kişi"
-            )
-        except:
+            sayfa.select_option("select[id*='adult'], select[name*='adult']", label=f"{yetiskin} Kişi")
+        except Exception:
             pass
-        insan_gibi_bekle(0.3, 0.5)
+        _bekle(0.3, 0.5)
         try:
-            sayfa.select_option(
-                "select[id*='child'], select[name*='child']",
-                label=f"{cocuk} Çocuk"
-            )
-        except:
+            sayfa.select_option("select[id*='child'], select[name*='child']", label=f"{cocuk} Çocuk")
+        except Exception:
             pass
-        insan_gibi_bekle(0.3, 0.5)
+        _bekle(0.3, 0.5)
         try:
-            sayfa.select_option(
-                "select[id*='infant'], select[name*='infant']",
-                label=f"{bebek} Bebek"
-            )
-        except:
+            sayfa.select_option("select[id*='infant'], select[name*='infant']", label=f"{bebek} Bebek")
+        except Exception:
             pass
-        log.info(f"Yolcu: {yetiskin} Kişi, {cocuk} Çocuk, {bebek} Bebek")
+        log.info(f"Yolcu: {yetiskin}Y {cocuk}Ç {bebek}B")
     except Exception as e:
         log.warning(f"Yolcu hatası: {e}")
 
@@ -503,75 +474,66 @@ def _yolcu_sec(sayfa, yetiskin: int, cocuk: int, bebek: int):
 def _sonuclari_oku(sayfa, nereden, nereye, direkt_mi, cfg) -> list:
     try:
         sonuclar = []
-        insan_gibi_bekle(2, 3)
         sayfa.wait_for_load_state("networkidle", timeout=20000)
 
-        fiyat_linkleri = sayfa.query_selector_all(
-            "a:has-text('Bütün Fiyatları Göster'), "
-            "span:has-text('Bütün Fiyatları Göster')"
-        )
-        log.info(f"{len(fiyat_linkleri)} fiyat linki")
-        for link in fiyat_linkleri:
+        for link in sayfa.query_selector_all("a:has-text('Bütün Fiyatları Göster'), span:has-text('Bütün Fiyatları Göster')"):
             try:
                 link.click()
-                insan_gibi_bekle(0.5, 1)
-            except:
+                _bekle(0.5, 1)
+            except Exception:
                 pass
 
-        insan_gibi_bekle(2, 3)
-        hata_screenshot(sayfa, "pegasus_sonuc_liste")
+        _bekle(2, 3)
+        _ss(sayfa, "05_sonuc_liste")
 
-        ucus_satirlari = sayfa.query_selector_all(
-            "tr:has(td):has([class*='flt']), "
-            "tr:has(td[class*='flight']), "
-            "[class*='flight-row'], "
-            "table.table tbody tr"
+        satirlar = sayfa.query_selector_all(
+            "tr:has(td):has([class*='flt']), tr:has(td[class*='flight']), "
+            "[class*='flight-row'], table.table tbody tr"
         )
-        log.info(f"{len(ucus_satirlari)} satır")
+        log.info(f"{len(satirlar)} satır")
         komisyon = cfg.KOMISYON.get("pegasus", 8) / 100
 
-        for satir in ucus_satirlari:
+        for satir in satirlar:
             try:
                 metin = satir.inner_text().strip()
                 if not metin:
                     continue
-                if direkt_mi and (
-                    "bağlantı" in metin.lower() or "1 Bağlantı" in metin
-                ):
+                if direkt_mi and ("bağlantı" in metin.lower() or "1 Bağlantı" in metin):
                     continue
-                ucus_no_bul = re.search(r'PC\d+', metin)
-                if not ucus_no_bul:
+                m = re.search(r'PC\d+', metin)
+                if not m:
                     continue
-                ucus_no = ucus_no_bul.group()
+                ucus_no = m.group()
                 saatler = re.findall(r'\d{2}:\d{2}', metin)
-                kalkis = saatler[0] if len(saatler) > 0 else ""
+                kalkis = saatler[0] if saatler else ""
                 varis = saatler[1] if len(saatler) > 1 else ""
-                sure_bul = re.search(r'(\d+)\s*sa\s*(\d+)?\s*dk?', metin)
+                sure_m = re.search(r'(\d+)\s*sa\s*(\d+)?\s*dk?', metin)
                 sure = ""
-                if sure_bul:
-                    sure = f"{sure_bul.group(1)}sa"
-                    if sure_bul.group(2):
-                        sure += f" {sure_bul.group(2)}dk"
-                hava_limani = ""
-                if "SAW" in metin or "Sabiha" in metin:
-                    hava_limani = "SAW"
-                elif "IST" in metin:
-                    hava_limani = "IST"
-                fiyat_listesi = []
-                _fiyat_cek(metin, fiyat_listesi)
-                if not fiyat_listesi:
+                if sure_m:
+                    sure = f"{sure_m.group(1)}sa"
+                    if sure_m.group(2):
+                        sure += f" {sure_m.group(2)}dk"
+
+                fiyatlar = []
+                for e in re.findall(r'([\d]{1,3}(?:[.,]\d{3})*[.,]\d{2})\s*TRY', metin):
+                    try:
+                        d = float(e.replace(".", "").replace(",", "."))
+                        if 100 < d < 500000 and d not in fiyatlar:
+                            fiyatlar.append(d)
+                    except Exception:
+                        pass
+                if not fiyatlar:
                     continue
-                paket_adlari = ["Light", "Süper Eko", "Avantaj", "Comfort Flex"]
+
                 paketler = []
-                for i, ad in enumerate(paket_adlari):
-                    if i < len(fiyat_listesi):
-                        haric = fiyat_listesi[i]
-                        dahil = round(haric * (1 + komisyon), 2)
+                for i, ad in enumerate(["Light", "Süper Eko", "Avantaj", "Comfort Flex"]):
+                    if i < len(fiyatlar):
+                        h = fiyatlar[i]
                         paketler.append({
                             "paket": ad,
                             "icerik": PAKET_ICERIKLERI.get(ad, ""),
-                            "fiyat_haric": haric,
-                            "fiyat_dahil": dahil,
+                            "fiyat_haric": h,
+                            "fiyat_dahil": round(h * (1 + komisyon), 2),
                         })
                 if paketler:
                     sonuclar.append({
@@ -582,114 +544,97 @@ def _sonuclari_oku(sayfa, nereden, nereye, direkt_mi, cfg) -> list:
                         "kalkis": kalkis,
                         "varis": varis,
                         "sure": sure,
-                        "hava_limani": hava_limani,
                         "paketler": paketler,
-                        "en_ucuz_haric": min(p["fiyat_haric"] for p in paketler),
                         "en_ucuz_dahil": min(p["fiyat_dahil"] for p in paketler),
                     })
             except Exception as e:
                 log.warning(f"Satır hatası: {e}")
-                continue
 
         log.info(f"Pegasus: {len(sonuclar)} uçuş")
         return sonuclar
 
     except Exception as e:
         log.error(f"Sonuç okuma hatası: {e}")
-        hata_screenshot(sayfa, "pegasus_sonuc_hata")
+        _ss(sayfa, "hata_sonuc")
         return []
 
 
-def _fiyat_cek(metin: str, liste: list):
-    eslesme = re.findall(
-        r'([\d]{1,3}(?:[.,]\d{3})*[.,]\d{2})\s*TRY', metin
-    )
-    for e in eslesme:
-        temiz = e.replace(".", "").replace(",", ".")
-        try:
-            deger = float(temiz)
-            if 100 < deger < 500000 and deger not in liste:
-                liste.append(deger)
-        except:
-            pass
-
+# ─────────────────────────────────────────────────────────────────────────────
+# 4. PAKET SEÇİMİ
+# ─────────────────────────────────────────────────────────────────────────────
 
 def pegasus_paket_sec(sayfa, ucus_no: str, paket_index: int) -> float:
     try:
-        log.info(f"Paket: {ucus_no} index={paket_index}")
-        ucus_satiri = sayfa.query_selector(f"tr:has-text('{ucus_no}')")
-        if not ucus_satiri:
+        log.info(f"Paket seç: {ucus_no} index={paket_index}")
+        satir = sayfa.query_selector(f"tr:has-text('{ucus_no}')")
+        if not satir:
             log.error(f"Uçuş satırı yok: {ucus_no}")
             return 0.0
 
-        radio_butonlar = ucus_satiri.query_selector_all("input[type='radio']")
-        if radio_butonlar and paket_index < len(radio_butonlar):
-            radio_butonlar[paket_index].click()
+        radios = satir.query_selector_all("input[type='radio']")
+        if radios and paket_index < len(radios):
+            radios[paket_index].click()
         else:
-            fiyat_hucreler = ucus_satiri.query_selector_all(
-                "td[class*='price'], td[class*='fare'], label"
-            )
-            if paket_index < len(fiyat_hucreler):
-                fiyat_hucreler[paket_index].click()
+            hucreler = satir.query_selector_all("td[class*='price'], td[class*='fare'], label")
+            if paket_index < len(hucreler):
+                hucreler[paket_index].click()
 
-        insan_gibi_bekle(2, 3)
+        _bekle(2, 3)
         sayfa.keyboard.press("End")
-        insan_gibi_bekle(1, 2)
+        _bekle(1, 2)
         toplam = _toplam_fiyat_oku(sayfa)
         log.info(f"Toplam: {toplam} TRY")
 
         sayfa.click("button:has-text('Devam'), a:has-text('Devam')")
-        insan_gibi_bekle(3, 5)
+        _bekle(3, 5)
 
         try:
             sayfa.wait_for_selector(
-                "a:has-text('Mevcut Seçimlerle İlerle'), "
-                "button:has-text('Mevcut Seçimlerle İlerle')",
+                "a:has-text('Mevcut Seçimlerle İlerle'), button:has-text('Mevcut Seçimlerle İlerle')",
                 timeout=8000
             )
-            sayfa.click(
-                "a:has-text('Mevcut Seçimlerle İlerle'), "
-                "button:has-text('Mevcut Seçimlerle İlerle')"
-            )
+            sayfa.click("a:has-text('Mevcut Seçimlerle İlerle'), button:has-text('Mevcut Seçimlerle İlerle')")
             log.info("Paket yükseltme geçildi")
-            insan_gibi_bekle(3, 5)
-        except:
+            _bekle(3, 5)
+        except Exception:
             pass
 
         try:
             sayfa.wait_for_url("**/RezvPaxEntry**", timeout=20000)
-        except:
+        except Exception:
             sayfa.wait_for_load_state("networkidle", timeout=20000)
 
         return toplam
 
     except Exception as e:
         log.error(f"Paket hatası: {e}")
-        hata_screenshot(sayfa, "pegasus_paket_hata")
+        _ss(sayfa, "hata_paket")
         return 0.0
 
 
 def _toplam_fiyat_oku(sayfa) -> float:
     try:
         el = sayfa.query_selector(
-            "[class*='total-price'], [class*='grand-total'], "
-            "[id*='totalPrice'], strong:has-text('TRY')"
+            "[class*='total-price'], [class*='grand-total'], [id*='totalPrice'], strong:has-text('TRY')"
         )
         if el:
-            metin = el.inner_text()
-            bul = re.search(r'([\d.,]+)\s*TRY', metin)
-            if bul:
-                return float(bul.group(1).replace(".", "").replace(",", "."))
-    except:
+            m = re.search(r'([\d.,]+)\s*TRY', el.inner_text())
+            if m:
+                return float(m.group(1).replace(".", "").replace(",", "."))
+    except Exception:
         pass
     return 0.0
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5. YOLCU BİLGİLERİ
+# ─────────────────────────────────────────────────────────────────────────────
 
 def pegasus_yolcu_doldur(sayfa, yolcular: list) -> bool:
     try:
         log.info(f"{len(yolcular)} yolcu dolduruluyor")
         sayfa.wait_for_load_state("networkidle", timeout=20000)
-        insan_gibi_bekle(2, 3)
+        _bekle(2, 3)
 
         yetiskinler = [y for y in yolcular if y.get("tip") not in ["cocuk", "bebek"]]
         cocuklar = [y for y in yolcular if y.get("tip") == "cocuk"]
@@ -701,58 +646,40 @@ def pegasus_yolcu_doldur(sayfa, yolcular: list) -> bool:
         _iletisim_doldur(sayfa)
         _onay_sec(sayfa)
 
-        insan_gibi_bekle(1, 2)
-        sayfa.click(
-            "button:has-text('Rezervasyonu Tamamla'), "
-            "a:has-text('Rezervasyonu Tamamla')"
-        )
-        insan_gibi_bekle(5, 8)
+        _bekle(1, 2)
+        sayfa.click("button:has-text('Rezervasyonu Tamamla'), a:has-text('Rezervasyonu Tamamla')")
+        _bekle(5, 8)
         _ek_hizmetler_gec(sayfa)
         return True
 
     except Exception as e:
         log.error(f"Yolcu doldurma hatası: {e}")
-        hata_screenshot(sayfa, "pegasus_yolcu_hata")
+        _ss(sayfa, "hata_yolcu")
         return False
 
 
 def _yetiskin_doldur(sayfa, yetiskinler: list):
-    cinsiyet_sels = sayfa.query_selector_all(
-        "select[name*='gender'], select[id*='gender']"
-    )
-    isim_sels = sayfa.query_selector_all(
-        "input[name*='firstName'], input[id*='firstName']"
-    )
-    soyisim_sels = sayfa.query_selector_all(
-        "input[name*='lastName'], input[id*='lastName']"
-    )
+    cinsiyet_sels = sayfa.query_selector_all("select[name*='gender'], select[id*='gender']")
+    isim_sels = sayfa.query_selector_all("input[name*='firstName'], input[id*='firstName']")
+    soyisim_sels = sayfa.query_selector_all("input[name*='lastName'], input[id*='lastName']")
     for i, y in enumerate(yetiskinler):
         try:
             if i < len(cinsiyet_sels):
                 label = "Erkek" if y.get("cinsiyet", "E") == "E" else "Kadın"
                 try:
                     cinsiyet_sels[i].select_option(label=label)
-                except:
-                    cinsiyet_sels[i].select_option(
-                        value="E" if label == "Erkek" else "K"
-                    )
-                insan_gibi_bekle(0.3, 0.5)
+                except Exception:
+                    cinsiyet_sels[i].select_option(value="E" if label == "Erkek" else "K")
+                _bekle(0.3, 0.5)
             if i < len(isim_sels):
                 isim_sels[i].fill(y.get("ad", "").upper())
-                insan_gibi_bekle(0.2, 0.4)
             if i < len(soyisim_sels):
                 soyisim_sels[i].fill(y.get("soyad", "").upper())
-                insan_gibi_bekle(0.2, 0.4)
             _dogum_doldur(sayfa, i, y.get("dogum", ""))
-            if not y.get("tc_vatandasi", True):
-                _tc_degil_sec(sayfa, i)
-            elif y.get("tc_no"):
-                tc_sels = sayfa.query_selector_all(
-                    "input[name*='tckn'], input[id*='tckn'], "
-                    "input[placeholder*='TC']"
-                )
+            if y.get("tc_no"):
+                tc_sels = sayfa.query_selector_all("input[name*='tckn'], input[id*='tckn'], input[placeholder*='TC']")
                 if i < len(tc_sels):
-                    tc_sels[i].fill(y.get("tc_no", ""))
+                    tc_sels[i].fill(y["tc_no"])
             log.info(f"Yetişkin {i+1}: {y.get('ad')} {y.get('soyad')}")
         except Exception as e:
             log.warning(f"Yetişkin {i+1} hatası: {e}")
@@ -761,12 +688,8 @@ def _yetiskin_doldur(sayfa, yetiskinler: list):
 def _cocuk_doldur(sayfa, cocuklar: list, offset: int):
     if not cocuklar:
         return
-    isim_sels = sayfa.query_selector_all(
-        "input[name*='firstName'], input[id*='firstName']"
-    )
-    soyisim_sels = sayfa.query_selector_all(
-        "input[name*='lastName'], input[id*='lastName']"
-    )
+    isim_sels = sayfa.query_selector_all("input[name*='firstName'], input[id*='firstName']")
+    soyisim_sels = sayfa.query_selector_all("input[name*='lastName'], input[id*='lastName']")
     for i, c in enumerate(cocuklar):
         idx = offset + i
         try:
@@ -775,9 +698,6 @@ def _cocuk_doldur(sayfa, cocuklar: list, offset: int):
             if idx < len(soyisim_sels):
                 soyisim_sels[idx].fill(c.get("soyad", "").upper())
             _dogum_doldur(sayfa, idx, c.get("dogum", ""))
-            if not c.get("tc_vatandasi", True):
-                _tc_degil_sec(sayfa, idx)
-            log.info(f"Çocuk {i+1} dolduruldu")
         except Exception as e:
             log.warning(f"Çocuk {i+1} hatası: {e}")
 
@@ -786,30 +706,24 @@ def _bebek_doldur(sayfa, bebekler: list, offset: int):
     if not bebekler:
         return
     ebeveyn_sels = sayfa.query_selector_all(
-        "select[name*='parent'], select[id*='parent'], "
-        "select:near(:text('Ebeveyn'))"
+        "select[name*='parent'], select[id*='parent'], select:near(:text('Ebeveyn'))"
     )
-    isim_sels = sayfa.query_selector_all(
-        "input[name*='firstName'], input[id*='firstName']"
-    )
-    soyisim_sels = sayfa.query_selector_all(
-        "input[name*='lastName'], input[id*='lastName']"
-    )
+    isim_sels = sayfa.query_selector_all("input[name*='firstName'], input[id*='firstName']")
+    soyisim_sels = sayfa.query_selector_all("input[name*='lastName'], input[id*='lastName']")
     for i, b in enumerate(bebekler):
         idx = offset + i
         try:
             if i < len(ebeveyn_sels):
                 try:
                     ebeveyn_sels[i].select_option(index=1)
-                except:
+                except Exception:
                     pass
-                insan_gibi_bekle(0.3, 0.5)
+                _bekle(0.3, 0.5)
             if idx < len(isim_sels):
                 isim_sels[idx].fill(b.get("ad", "").upper())
             if idx < len(soyisim_sels):
                 soyisim_sels[idx].fill(b.get("soyad", "").upper())
             _dogum_doldur(sayfa, idx, b.get("dogum", ""))
-            log.info(f"Bebek {i+1} dolduruldu")
         except Exception as e:
             log.warning(f"Bebek {i+1} hatası: {e}")
 
@@ -824,31 +738,21 @@ def _dogum_doldur(sayfa, index: int, dogum: str):
         gun = p[0].lstrip("0") or "1"
         ay = p[1]
         yil = p[2]
-        AYLAR = {
-            "01": "Ocak", "02": "Şubat", "03": "Mart",
-            "04": "Nisan", "05": "Mayıs", "06": "Haziran",
-            "07": "Temmuz", "08": "Ağustos", "09": "Eylül",
-            "10": "Ekim", "11": "Kasım", "12": "Aralık"
-        }
-        ay_adi = AYLAR.get(ay, ay)
-        gun_sels = sayfa.query_selector_all(
-            "select[name*='Day'], select[name*='day'], select[id*='Day']"
-        )
-        ay_sels = sayfa.query_selector_all(
-            "select[name*='Month'], select[name*='month'], select[id*='Month']"
-        )
-        yil_sels = sayfa.query_selector_all(
-            "select[name*='Year'], select[name*='year'], select[id*='Year']"
-        )
+        AYLAR = {"01":"Ocak","02":"Şubat","03":"Mart","04":"Nisan","05":"Mayıs",
+                 "06":"Haziran","07":"Temmuz","08":"Ağustos","09":"Eylül",
+                 "10":"Ekim","11":"Kasım","12":"Aralık"}
+        gun_sels = sayfa.query_selector_all("select[name*='Day'], select[id*='Day']")
+        ay_sels = sayfa.query_selector_all("select[name*='Month'], select[id*='Month']")
+        yil_sels = sayfa.query_selector_all("select[name*='Year'], select[id*='Year']")
         if index < len(gun_sels):
             try:
                 gun_sels[index].select_option(value=gun)
-            except:
+            except Exception:
                 gun_sels[index].select_option(label=gun)
         if index < len(ay_sels):
             try:
-                ay_sels[index].select_option(label=ay_adi)
-            except:
+                ay_sels[index].select_option(label=AYLAR.get(ay, ay))
+            except Exception:
                 ay_sels[index].select_option(value=str(int(ay)))
         if index < len(yil_sels):
             yil_sels[index].select_option(value=yil)
@@ -856,52 +760,30 @@ def _dogum_doldur(sayfa, index: int, dogum: str):
         log.warning(f"Doğum hatası (idx={index}): {e}")
 
 
-def _tc_degil_sec(sayfa, index: int):
-    try:
-        cbs = sayfa.query_selector_all(
-            "input[type='checkbox']:near(:text('T.C. Vatandaşı Değil'))"
-        )
-        if index < len(cbs) and not cbs[index].is_checked():
-            cbs[index].click()
-    except Exception as e:
-        log.warning(f"TC değil hatası: {e}")
-
-
 def _iletisim_doldur(sayfa):
     try:
-        log.info("İletişim dolduruluyor")
         try:
-            cb = sayfa.query_selector(
-                "input[type='checkbox']:near(:text('İlk Yolcu Bilgilerini Getir'))"
-            )
+            cb = sayfa.query_selector("input[type='checkbox']:near(:text('İlk Yolcu Bilgilerini Getir'))")
             if cb and not cb.is_checked():
                 cb.click()
-                insan_gibi_bekle(1, 2)
-        except:
+                _bekle(1, 2)
+        except Exception:
             pass
 
-        insan_gibi_bekle(1, 2)
-
-        tel_sels = sayfa.query_selector_all(
-            "input[name*='phone'], input[id*='phone'], input[type='tel']"
-        )
+        _bekle(1, 2)
+        tel_sels = sayfa.query_selector_all("input[name*='phone'], input[id*='phone'], input[type='tel']")
         if len(tel_sels) >= 2:
             tel_sels[0].fill(ACENTE_TEL_ALAN)
-            insan_gibi_bekle(0.3, 0.5)
+            _bekle(0.3, 0.5)
             tel_sels[1].fill(ACENTE_TEL_NO)
         elif len(tel_sels) == 1:
             tel_sels[0].fill(ACENTE_TEL_ALAN + ACENTE_TEL_NO)
-
         if len(tel_sels) >= 4:
             tel_sels[2].fill(ACENTE_TEL_ALAN)
-            insan_gibi_bekle(0.3, 0.5)
+            _bekle(0.3, 0.5)
             tel_sels[3].fill(ACENTE_TEL_NO)
 
-        insan_gibi_bekle(0.5, 1)
-
-        email_sels = sayfa.query_selector_all(
-            "input[type='email'], input[name*='email'], input[id*='email']"
-        )
+        email_sels = sayfa.query_selector_all("input[type='email'], input[name*='email'], input[id*='email']")
         if email_sels:
             email_sels[0].fill(ACENTE_EMAIL)
 
@@ -912,30 +794,18 @@ def _iletisim_doldur(sayfa):
 
 def _onay_sec(sayfa):
     try:
-        tum_cbs = sayfa.query_selector_all("input[type='checkbox']")
-        son_onay = None
-        for cb in tum_cbs:
+        for cb in sayfa.query_selector_all("input[type='checkbox']"):
             try:
-                parent_metin = cb.evaluate(
-                    "el => el.closest('div,tr,p,label,td')?.innerText || ''"
-                )
-                if any(x in parent_metin for x in [
-                    "186", "SMS bedeli", "BolBol",
-                    "İlk Yolcu", "T.C. Vatandaşı"
-                ]):
+                etiket = cb.evaluate("el => el.closest('div,tr,p,label,td')?.innerText || ''")
+                # Ücretli SMS (186,87 TRY), BolBol, İlk Yolcu, TC Vatandaşı kutularını atla
+                if any(x in etiket for x in ["186", "SMS bedeli", "BolBol", "İlk Yolcu", "T.C. Vatandaşı"]):
                     continue
-                if any(x in parent_metin for x in [
-                    "onaylıyorum", "kabul ediyorum", "sorumlu"
-                ]):
-                    son_onay = cb
-            except:
+                if any(x in etiket.lower() for x in ["onaylıyorum", "kabul ediyorum", "sorumlu"]):
+                    if not cb.is_checked():
+                        cb.click()
+                        log.info(f"Onay işaretlendi ✅: {etiket[:60]}")
+            except Exception:
                 continue
-
-        if son_onay and not son_onay.is_checked():
-            son_onay.click()
-            log.info("Onay kutucuğu işaretlendi ✅")
-        else:
-            log.warning("Onay kutucuğu bulunamadı")
     except Exception as e:
         log.warning(f"Onay hatası: {e}")
 
@@ -944,53 +814,51 @@ def _ek_hizmetler_gec(sayfa):
     try:
         try:
             sayfa.wait_for_url("**/SellSsr**", timeout=15000)
-        except:
+        except Exception:
             try:
                 sayfa.wait_for_selector(
-                    "a:has-text('Ödemeye Devam Et'), "
-                    "button:has-text('Ödemeye Devam Et')",
+                    "a:has-text('Ödemeye Devam Et'), button:has-text('Ödemeye Devam Et')",
                     timeout=10000
                 )
-            except:
+            except Exception:
                 log.info("Ek hizmetler sayfası yok")
                 return
-
-        insan_gibi_bekle(2, 3)
-        sayfa.click(
-            "a:has-text('Ödemeye Devam Et'), "
-            "button:has-text('Ödemeye Devam Et')"
-        )
+        _bekle(2, 3)
+        sayfa.click("a:has-text('Ödemeye Devam Et'), button:has-text('Ödemeye Devam Et')")
         log.info("Ek hizmetler geçildi ✅")
-        insan_gibi_bekle(3, 5)
+        _bekle(3, 5)
     except Exception as e:
         log.warning(f"Ek hizmetler hatası: {e}")
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 6. REZERVASYON BİLGİSİ
+# ─────────────────────────────────────────────────────────────────────────────
+
 def pegasus_rezervasyon_bilgisi_al(sayfa) -> dict:
     try:
-        insan_gibi_bekle(3, 5)
+        _bekle(3, 5)
         sayfa.wait_for_load_state("networkidle", timeout=20000)
-        hata_screenshot(sayfa, "pegasus_rezervasyon_sonuc")
+        _ss(sayfa, "06_rezervasyon_sonuc")
 
         pnr = ""
         try:
             el = sayfa.query_selector("*:has-text('Rezervasyon (PNR) No')")
             if el:
-                metin = el.inner_text()
-                bul = re.search(r'(?:PNR|No)[.\s:]*([A-Z0-9]{5,6})', metin)
-                if bul:
-                    pnr = bul.group(1)
-        except:
+                m = re.search(r'(?:PNR|No)[.\s:]*([A-Z0-9]{5,6})', el.inner_text())
+                if m:
+                    pnr = m.group(1)
+        except Exception:
             pass
 
         if not pnr:
             try:
                 el = sayfa.query_selector("[class*='pnr'], [id*='pnr']")
                 if el:
-                    bul = re.search(r'\b([A-Z0-9]{5,6})\b', el.inner_text())
-                    if bul:
-                        pnr = bul.group(1)
-            except:
+                    m = re.search(r'\b([A-Z0-9]{5,6})\b', el.inner_text())
+                    if m:
+                        pnr = m.group(1)
+            except Exception:
                 pass
 
         log.info(f"PNR: {pnr or 'ALINAMADI'}")
@@ -999,15 +867,12 @@ def pegasus_rezervasyon_bilgisi_al(sayfa) -> dict:
             "mesaj": (
                 f"✅ *Rezervasyon Oluşturuldu!*\n\n"
                 f"PNR: `{pnr or 'ALINAMADI'}`\n\n"
-                f"Lütfen Pegasus acente ekranından ödemeyi tamamlayın."
-            )
+                "Pegasus acente ekranından ödemeyi tamamlayın."
+            ),
         }
     except Exception as e:
         log.error(f"PNR hatası: {e}")
         return {
             "pnr": "ALINAMADI",
-            "mesaj": (
-                "⚠️ Rezervasyon tamamlandı ancak PNR alınamadı.\n"
-                "Lütfen Pegasus sistemini kontrol edin."
-            )
+            "mesaj": "⚠️ Rezervasyon tamamlandı ancak PNR alınamadı. Pegasus sistemini kontrol edin.",
         }
