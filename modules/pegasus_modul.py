@@ -241,24 +241,36 @@ def pegasus_otp_gir(konteks, sayfa, otp_kodu: str):
         sayfa.fill("input[name='OTP_INPUT']", kod)
         _bekle(0.5, 1.0)
 
-        # Giriş yap — get_by_text → locator → Enter
-        with konteks.expect_page(timeout=30000) as yeni_bilgi:
+        # Giriş yap — tıkla ve mevcut sayfada navigasyonu bekle
+        try:
+            sayfa.get_by_text("Giriş yap", exact=True).click(timeout=5000)
+            log.info("Giriş yap tıklandı ✅")
+        except Exception:
             try:
-                sayfa.get_by_text("Giriş yap", exact=True).click(timeout=5000)
-                log.info("Giriş yap tıklandı ✅")
+                sayfa.locator("text=Giriş yap").first.click(timeout=5000)
+                log.info("Giriş yap tıklandı ✅ (locator)")
             except Exception:
-                try:
-                    sayfa.locator("text=Giriş yap").first.click(timeout=5000)
-                    log.info("Giriş yap tıklandı ✅ (locator)")
-                except Exception:
-                    sayfa.press("input[name='OTP_INPUT']", "Enter")
-                    log.info("Giriş yap — Enter ✅")
+                sayfa.press("input[name='OTP_INPUT']", "Enter")
+                log.info("Giriş yap — Enter ✅")
 
-        yeni_sayfa = yeni_bilgi.value
-        yeni_sayfa.wait_for_load_state("domcontentloaded", timeout=30000)
-        _bekle(3, 5)
+        # Mevcut sayfada navigasyon veya yeni popup — ikisini de dene
+        yeni_sayfa = None
+        try:
+            # Yeni popup pencere açılırsa yakala (kısa timeout)
+            with konteks.expect_page(timeout=8000) as yeni_bilgi:
+                pass
+            yeni_sayfa = yeni_bilgi.value
+            yeni_sayfa.wait_for_load_state("domcontentloaded", timeout=30000)
+            log.info(f"Yeni pencere açıldı: {yeni_sayfa.url}")
+        except Exception:
+            # Popup yok — mevcut sayfada devam ediyor
+            log.info("Popup yok, mevcut sayfada bekleniyor...")
+            sayfa.wait_for_load_state("domcontentloaded", timeout=30000)
+            _bekle(3, 5)
+            yeni_sayfa = sayfa
+            log.info(f"Mevcut sayfa URL: {sayfa.url}")
 
-        log.info(f"Yeni pencere: {yeni_sayfa.url}")
+        _bekle(2, 3)
         _ss(yeni_sayfa, "04_ana_ekran")
 
         if "acente.flypgs.com" in yeni_sayfa.url:
