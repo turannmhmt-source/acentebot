@@ -128,19 +128,27 @@ def pegasus_giris_baslat(tarayici) -> tuple:
             sayfa.wait_for_selector("input[name='OTP_INPUT']", state="visible", timeout=15000)
             log.info("OTP ekranı açıldı ✅")
 
-        # SMS Gönder — input[name='FMP_SMS'] veya button
+        # SMS Gönder — JS ile tüm elementleri tara
         try:
-            sms_btn = (
-                sayfa.query_selector("input[name='FMP_SMS']") or
-                sayfa.query_selector("button:has-text('SMS Gönder')") or
-                sayfa.query_selector("input[value*='SMS']")
-            )
-            if sms_btn and sms_btn.is_visible():
-                sms_btn.click()
-                log.info("SMS Gönder tıklandı ✅")
+            tiklandi = sayfa.evaluate("""
+                () => {
+                    const elems = Array.from(document.querySelectorAll(
+                        'button, input[type=submit], input[type=button], a'
+                    ));
+                    for (const el of elems) {
+                        const t = (el.textContent || el.value || '').trim();
+                        if (t.includes('SMS') && t.includes('nder')) {
+                            el.click(); return true;
+                        }
+                    }
+                    return false;
+                }
+            """)
+            if tiklandi:
+                log.info("SMS Gönder tıklandı ✅ (JS)")
                 _bekle(2, 3)
             else:
-                log.warning("SMS Gönder butonu görünür değil, devam ediliyor")
+                log.warning("SMS Gönder bulunamadı, devam ediliyor")
         except Exception as e:
             log.warning(f"SMS butonu: {e}")
 
@@ -244,17 +252,24 @@ def pegasus_otp_gir(konteks, sayfa, otp_kodu: str):
         sayfa.fill("input[name='OTP_INPUT']", kod)
         _bekle(0.5, 1.0)
 
-        # "Giriş yap" — button veya input[type=submit] veya Enter
-        giris_btn = (
-            sayfa.query_selector("button:has-text('Giriş yap')") or
-            sayfa.query_selector("input[type='submit']") or
-            sayfa.query_selector("a:has-text('Giriş yap')")
-        )
-
+        # Giriş yap — önce JS, yoksa Enter
         with konteks.expect_page(timeout=30000) as yeni_bilgi:
-            if giris_btn and giris_btn.is_visible():
-                giris_btn.click()
-                log.info("Giriş yap tıklandı ✅")
+            tiklandi = sayfa.evaluate("""
+                () => {
+                    const elems = Array.from(document.querySelectorAll(
+                        'button, input[type=submit], input[type=button], a'
+                    ));
+                    for (const el of elems) {
+                        const t = (el.textContent || el.value || '').trim();
+                        if (t.includes('Giri') || t.toLowerCase().includes('login')) {
+                            el.click(); return true;
+                        }
+                    }
+                    return false;
+                }
+            """)
+            if tiklandi:
+                log.info("Giriş yap tıklandı ✅ (JS)")
             else:
                 sayfa.press("input[name='OTP_INPUT']", "Enter")
                 log.info("Giriş yap — Enter ile ✅")
