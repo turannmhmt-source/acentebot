@@ -387,6 +387,26 @@ def pegasus_ucus_sorgula(sayfa, komut: dict) -> list:
         _bekle(1, 2)
         _ss(sayfa, "05c_form_dolu")
 
+        # ── Form submit öncesi hidden input değerlerini logla ─────────────────
+        try:
+            hidden = sayfa.evaluate("""
+                () => {
+                    const inp = document.querySelector(
+                        "input[name='LAB_DEPPORT'], input[id='LAB_DEPPORT']"
+                    );
+                    const frm = inp ? inp.closest('form') : null;
+                    if (!frm) return [];
+                    return Array.from(frm.querySelectorAll('input')).map(el => ({
+                        type: el.type, name: el.name, id: el.id, val: el.value
+                    }));
+                }
+            """)
+            log.info(f"Form input'ları ({len(hidden)} adet) submit öncesi:")
+            for h in hidden:
+                log.info(f"  [{h['type']}] name={h['name']} id={h['id']} val='{h['val']}'")
+        except Exception as ex:
+            log.warning(f"Hidden input log hatası: {ex}")
+
         # ── Ara butonu ────────────────────────────────────────────────────────
         _ara_tikla(sayfa)
         _bekle(3, 5)
