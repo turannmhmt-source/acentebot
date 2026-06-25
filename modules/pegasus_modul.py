@@ -598,59 +598,61 @@ def _sehir_sec(sayfa, iata: str, tip: str):
             girdi.press(c)
             time.sleep(0.07)
 
-        # jQuery autocomplete tetikle (varsa)
+        _bekle(2, 3)
+        _ss(sayfa, f"sehir_yazildi_{tip}")
+
+        # ── Dropdown açıldıktan sonra ne göründüğünü logla ───────────────────
         try:
-            sayfa.evaluate(f"""
-                () => {{
-                    const el = document.activeElement;
-                    if (!el) return;
-                    const inp = document.activeElement;
-                    if (!inp) return;
-                    if (window.$ && $(inp).data('ui-autocomplete')) {{
-                        $(inp).autocomplete('search', {repr(arama)});
-                    }}
-                    ['input','keyup','keydown'].forEach(ev =>
-                        inp.dispatchEvent(new Event(ev, {{bubbles:true}})));
-                }}
+            gorunen = sayfa.evaluate("""
+                () => Array.from(document.querySelectorAll('li, [class*="option"], [class*="item"], [role="option"]'))
+                    .filter(el => el.offsetParent !== null && el.innerText.trim().length > 0)
+                    .slice(0, 10)
+                    .map(el => el.tagName + '|' + (el.className||'').substring(0,40) + '|' + el.innerText.trim().substring(0,30))
             """)
+            log.info(f"Dropdown sonrası visible elemanlar ({tip}): {gorunen}")
         except Exception:
             pass
 
-        _bekle(1.5, 2.5)
-
-        # ── Dropdown/autocomplete popup açıldı mı kontrol et ─────────────────
-        # Önce herhangi bir visible li elementi ara (dropdown açık mı?)
+        # ── SelectBox dropdown seç (Pegasus custom component) ─────────────────
         POPUP_KONTEYNER = [
+            "[class*='SelectBox__dropdown']",
+            "[class*='SelectBox__list']",
+            "[class*='SelectBox__options']",
+            "[class*='SelectBox__menu']",
+            "[class*='SelectBox__popup']",
+            "[class*='selectbox-dropdown']",
+            "[class*='selectbox-list']",
             ".ui-autocomplete",
             "[class*='ui-autocomplete']",
-            "[class*='autocomplete-results']",
-            "[class*='autocomplete-dropdown']",
-            "[class*='suggestion-list']",
-            "[class*='suggestions']",
+            "[class*='autocomplete']",
+            "[class*='suggestion']",
             "ul[role='listbox']",
+            "[role='listbox']",
         ]
         secildi = False
 
         for konteyner in POPUP_KONTEYNER:
             try:
-                sayfa.wait_for_selector(f"{konteyner} li", timeout=2500, state="visible")
-                # Konteyner açık — içinde arama metnine uyan li bul
+                sayfa.wait_for_selector(f"{konteyner}", timeout=1500, state="visible")
+                # Konteyner açık — içinde arama metnine uyan item bul
                 eslesen = sayfa.evaluate(f"""
                     () => {{
-                        const items = document.querySelectorAll('{konteyner} li');
+                        const cont = document.querySelector('{konteyner}');
+                        if (!cont) return null;
+                        const items = cont.querySelectorAll('li, div, span, a, [role="option"]');
                         const ara = {repr(arama.lower())};
-                        for (const li of items) {{
-                            if (li.offsetParent !== null &&
-                                li.innerText.toLowerCase().includes(ara)) {{
-                                li.click();
-                                return li.innerText.trim();
+                        for (const el of items) {{
+                            if (el.offsetParent !== null &&
+                                el.innerText && el.innerText.toLowerCase().includes(ara)) {{
+                                el.click();
+                                return el.innerText.trim();
                             }}
                         }}
-                        // Eşleşme bulunamadı, ilk görünür li'yi seç
-                        for (const li of items) {{
-                            if (li.offsetParent !== null) {{
-                                li.click();
-                                return 'first:' + li.innerText.trim();
+                        // Eşleşme bulunamadı — ilk görünür item
+                        for (const el of items) {{
+                            if (el.offsetParent !== null && el.innerText.trim()) {{
+                                el.click();
+                                return 'first:' + el.innerText.trim();
                             }}
                         }}
                         return null;
