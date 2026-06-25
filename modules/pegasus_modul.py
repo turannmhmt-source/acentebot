@@ -570,68 +570,34 @@ def _sehir_input_bul(sayfa, tip: str):
 
 
 def _sehir_sec(sayfa, iata: str, tip: str):
-    """
-    Dropdown yapısı (screenshottan): iki panel — sol şehir listesi, sağ ülke.
-    Her şehir item'ı: bold şehir adı + altında 'Türkiye' yazısı.
-    """
     arama = SEHIR_ARAMA.get(iata, iata)
     inp_sel = "input[name='LAB_DEPPORT']" if tip == "nereden" else "input[name='LAB_ARRPORT']"
 
-    girdi = _sehir_input_bul(sayfa, tip)
-    if not girdi:
-        log.warning(f"Şehir input bulunamadı ({tip}-{iata})")
-        return
-
     try:
-        # 1. Tıkla, mevcut değeri sil, arama metnini yaz
-        girdi.click()
+        # Tıkla, temizle, yaz
+        sayfa.click(inp_sel)
         _bekle(0.3, 0.5)
         sayfa.keyboard.press("Control+a")
         sayfa.keyboard.press("Delete")
         _bekle(0.1, 0.2)
+        sayfa.type(inp_sel, arama, delay=80)
+        _bekle(2.5, 3.5)
 
-        for c in arama:
-            girdi.press(c)
-            time.sleep(0.08)
+        # Playwright locator ile gerçek mouse tıklaması (React eventlerini tetikler)
+        try:
+            loc = sayfa.locator(f"text={arama}").first
+            loc.click(timeout=4000)
+            log.info(f"Şehir seçildi (locator): {arama} ({tip})")
+            _bekle(0.5, 1)
+            return
+        except Exception:
+            pass
 
-        _bekle(2, 3)  # dropdown açılmasını bekle
-
-        # 2. Dropdown içindeki şehir item'ını JS ile bul ve tıkla
-        #    Screenshottan: dropdown, input'a yakın bir panelde açılıyor.
-        #    Şehir adları bold metin olarak görünüyor.
-        secildi = sayfa.evaluate(f"""
-            () => {{
-                const ara = {repr(arama.lower())};
-                const aktif = document.activeElement;
-
-                // Tüm visible elemanları tara
-                // Önce kısa metin (leaf-like) olanları dene — şehir adı
-                const tum = Array.from(document.querySelectorAll('*'));
-
-                // 1. Deneme: innerText tam olarak şehir adını içeriyor, çok az child var
-                for (const el of tum) {{
-                    if (!el.offsetParent || el === aktif) continue;
-                    if (['INPUT','TEXTAREA','SCRIPT','STYLE','BODY','HTML'].includes(el.tagName)) continue;
-                    const txt = (el.innerText || '').trim().toLowerCase();
-                    if (!txt.includes(ara)) continue;
-                    // 3 satırdan az metin (şehir adı + ülke = 2 satır)
-                    if (txt.split('\\n').length > 4) continue;
-                    el.click();
-                    return el.innerText.trim().substring(0,50);
-                }}
-                return null;
-            }}
-        """)
-
-        if secildi:
-            log.info(f"Şehir seçildi ({tip}): '{secildi}'")
-        else:
-            # Fallback: ArrowDown + Enter
-            sayfa.keyboard.press("ArrowDown")
-            _bekle(0.4, 0.6)
-            sayfa.keyboard.press("Enter")
-            log.info(f"Şehir ArrowDown+Enter ({tip})")
-
+        # Fallback: ArrowDown + Enter
+        sayfa.keyboard.press("ArrowDown")
+        _bekle(0.5, 0.8)
+        sayfa.keyboard.press("Enter")
+        log.info(f"Şehir seçildi (ArrowDown+Enter): {arama} ({tip})")
         _bekle(0.5, 1)
 
     except Exception as e:
@@ -723,12 +689,29 @@ def _tarih_sec(sayfa, tarih: str, tip: str):
             log.warning(f"Tarih alanı bulunamadı ({tip}), atlıyorum")
             return
 
-        # ── 1. Önce tıklayıp takvim açılıyor mu dene ─────────────────────────
-        tarih_inp_sel = "input[name='FLTDATE']" if tip == "gidis" else "input[name='RETURNDATE']"
+        # ── 1. JS ile direkt value set (en güvenilir) ─────────────────────────
+        try:
+            sayfa.evaluate(f"""
+                () => {{
+                    const inp = document.querySelector("input[name='FLTDATE'], input[id='FLTDATE']");
+                    if (!inp) return;
+                    const setter = Object.getOwnPropertyDescriptor(
+                        window.HTMLInputElement.prototype, 'value').set;
+                    setter.call(inp, '{tarih_str}');
+                    inp.dispatchEvent(new Event('input', {{bubbles:true}}));
+                    inp.dispatchEvent(new Event('change', {{bubbles:true}}));
+                }}
+            """)
+            deger = girdi.input_value()
+            if str(gun) in deger or tarih_str in deger:
+                log.info(f"Tarih JS ile set edildi ({tip}): '{deger}'")
+                return
+        except Exception:
+            pass
+
+        # ── 2. Tıkla → takvim açılırsa oradan seç ────────────────────────────
         girdi.click()
         _bekle(1, 1.5)
-
-        # Takvim açıldıysa oradan seç
         takvim_var = False
         for tk_sel in [".ui-datepicker", "[class*='datepicker']", "[class*='calendar']",
                        "[class*='DatePicker']", "[class*='Calendar']"]:
@@ -745,20 +728,12 @@ def _tarih_sec(sayfa, tarih: str, tip: str):
             log.info(f"Tarih takvimden seçildi ({tip}): {gun}.{ay}.{yil}")
             return
 
-        # ── 2. Takvim yoksa direkt yaz ────────────────────────────────────────
-        try:
-            sayfa.keyboard.press("Control+a")
-            sayfa.keyboard.press("Delete")
-            _bekle(0.1, 0.2)
-            for c in tarih_str:
-                girdi.press(c)
-                time.sleep(0.05)
-            sayfa.keyboard.press("Tab")
-            _bekle(0.5, 1)
-            deger = girdi.input_value()
-            log.info(f"Tarih yazıldı ({tip}): '{deger}'")
-        except Exception as te:
-            log.warning(f"Tarih yazma hatası: {te}")
+        # ── 3. Direkt yaz ─────────────────────────────────────────────────────
+        sayfa.keyboard.press("Control+a")
+        sayfa.keyboard.press("Delete")
+        sayfa.type(f"input[name='FLTDATE']", tarih_str, delay=60)
+        sayfa.keyboard.press("Escape")
+        log.info(f"Tarih yazıldı ({tip}): {tarih_str}")
 
     except Exception as e:
         log.warning(f"Tarih hatası ({tip}): {e}")
