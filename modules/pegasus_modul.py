@@ -316,7 +316,7 @@ def _otp_cikart(metin: str) -> str:
 
 def pegasus_ucus_sorgula(sayfa, komut: dict) -> list:
     """
-    Ana ekranda form doldurur, uçuş listesini döner.
+    MemberRezvEntry.jsp formunu doldurur, uçuş listesini döner.
     komut = {tip, nereden, nereye, tarih, yetiskin, cocuk, bebek, direkt_mi}
     """
     import config as cfg
@@ -332,39 +332,48 @@ def pegasus_ucus_sorgula(sayfa, komut: dict) -> list:
         log.info(f"Sorgu: {nereden}→{nereye} {tip}")
 
         sayfa.goto(PEGASUS_ANA_URL, wait_until="domcontentloaded", timeout=30000)
-        _bekle(3, 4)
+        _bekle(3, 5)
         _ss(sayfa, "05_ana_ekran")
 
-        # Sayfadaki tüm visible input'ları logla (bir kez diagnostic)
+        # ── Tüm form elemanlarını logla (kalıcı diagnostic) ──────────────────
         try:
-            inputlar = sayfa.evaluate("""
-                () => Array.from(document.querySelectorAll('input:not([type=hidden]),select,textarea'))
-                    .filter(el => el.offsetParent !== null)
-                    .map(el => el.tagName+'|'+el.type+'|'+el.name+'|'+el.id+'|'+el.placeholder)
+            elemanlar = sayfa.evaluate("""
+                () => Array.from(document.querySelectorAll(
+                    'input:not([type=hidden]), select, textarea, button, a[onclick]'
+                ))
+                .filter(el => el.offsetParent !== null)
+                .map(el => ({
+                    tag: el.tagName,
+                    type: el.type || '',
+                    name: el.name || '',
+                    id: el.id || '',
+                    placeholder: el.placeholder || '',
+                    cls: (el.className || '').substring(0, 40),
+                    val: (el.value || '').substring(0, 20),
+                    txt: (el.innerText || '').trim().substring(0, 20)
+                }))
             """)
-            log.info(f"Ana ekran inputları: {inputlar[:15]}")
-        except Exception:
-            pass
+            log.info(f"Form elemanları ({len(elemanlar)} adet):")
+            for e in elemanlar[:30]:
+                log.info(f"  {e['tag']}|{e['type']}|name={e['name']}|id={e['id']}|ph={e['placeholder']}|cls={e['cls']}|val={e['val']}|txt={e['txt']}")
+        except Exception as ex:
+            log.warning(f"Eleman log hatası: {ex}")
 
-        # Uçuş tipi
+        # ── Uçuş tipi seç ─────────────────────────────────────────────────────
         if tip == "tek_yon":
-            try:
-                sayfa.click("a:has-text('Tek Yön'), li:has-text('Tek Yön')")
-                _bekle(1, 2)
-            except Exception:
-                pass
+            _tab_sec(sayfa, "Tek Yön")
         elif tip == "gidis_donus":
-            try:
-                sayfa.click("a:has-text('Gidiş - Dönüş')")
-                _bekle(1, 2)
-            except Exception:
-                pass
+            _tab_sec(sayfa, "Gidiş - Dönüş")
+        _bekle(1, 2)
 
+        # ── Şehir ─────────────────────────────────────────────────────────────
         _sehir_sec(sayfa, nereden, "nereden")
-        _bekle(1, 2)
+        _bekle(1.5, 2.5)
         _sehir_sec(sayfa, nereye, "nereye")
-        _bekle(1, 2)
+        _bekle(1.5, 2.5)
+        _ss(sayfa, "05b_sehir_sonrasi")
 
+        # ── Tarih ─────────────────────────────────────────────────────────────
         if tip == "tek_yon":
             _tarih_sec(sayfa, komut.get("tarih", ""), "gidis")
         else:
@@ -373,44 +382,38 @@ def pegasus_ucus_sorgula(sayfa, komut: dict) -> list:
             _tarih_sec(sayfa, komut.get("donus_tarihi", ""), "donus")
         _bekle(1, 2)
 
+        # ── Yolcu ─────────────────────────────────────────────────────────────
         _yolcu_sec(sayfa, yetiskin, cocuk, bebek)
         _bekle(1, 2)
+        _ss(sayfa, "05c_form_dolu")
 
-        # "Ara" butonu — sarı submit butonu
-        ara_secildi = False
-        for sel in ["input[value='Ara']", "button:has-text('Ara')",
-                    "input[type='submit']", "button[type='submit']",
-                    "a:has-text('Ara')"]:
+        # ── Ara butonu ────────────────────────────────────────────────────────
+        _ara_tikla(sayfa)
+        _bekle(3, 5)
+
+        # ── Popup varsa geç ───────────────────────────────────────────────────
+        for popup_sel in ["button:has-text('Devam')", "a:has-text('Devam')",
+                          "button:has-text('Tamam')", "button:has-text('Kapat')"]:
             try:
-                el = sayfa.query_selector(sel)
-                if el and el.is_visible():
-                    el.click()
-                    log.info(f"Ara butonu tıklandı: {sel}")
-                    ara_secildi = True
-                    break
+                sayfa.wait_for_selector(popup_sel, timeout=5000)
+                sayfa.click(popup_sel)
+                log.info(f"Popup geçildi: {popup_sel}")
+                _bekle(2, 3)
+                break
             except Exception:
-                continue
-        if not ara_secildi:
-            sayfa.evaluate("() => { const f = document.querySelector('form'); if(f) f.submit(); }")
-            log.info("Ara — form.submit()")
-        _bekle(3, 5)
+                pass
 
-        # Uyarı popup
+        # ── Sonuç sayfasını bekle ─────────────────────────────────────────────
         try:
-            sayfa.wait_for_selector("button:has-text('Devam')", timeout=6000)
-            sayfa.click("button:has-text('Devam')")
-            log.info("Popup geçildi")
-            _bekle(3, 5)
+            sayfa.wait_for_url("**/MemberRezvResults**", timeout=45000)
         except Exception:
-            pass
-
-        # Sonuç sayfası
-        try:
-            sayfa.wait_for_url("**/MemberRezvResults**", timeout=30000)
-        except Exception:
-            sayfa.wait_for_load_state("networkidle", timeout=20000)
+            try:
+                sayfa.wait_for_load_state("networkidle", timeout=30000)
+            except Exception:
+                pass
 
         _bekle(3, 5)
+        _ss(sayfa, "05d_sonuc")
         return _sonuclari_oku(sayfa, nereden, nereye, direkt_mi, cfg)
 
     except Exception as e:
@@ -419,127 +422,221 @@ def pegasus_ucus_sorgula(sayfa, komut: dict) -> list:
         return []
 
 
-def _sehir_sec(sayfa, iata: str, tip: str):
-    arama = SEHIR_ARAMA.get(iata, iata)
+def _tab_sec(sayfa, metin: str):
+    """Tek Yön / Gidiş-Dönüş / Çoklu Uçuş tabını seç."""
+    for sel in [f"a:has-text('{metin}')", f"li:has-text('{metin}')",
+                f"span:has-text('{metin}')", f"button:has-text('{metin}')",
+                f"[class*='tab']:has-text('{metin}')"]:
+        try:
+            el = sayfa.query_selector(sel)
+            if el and el.is_visible():
+                el.click()
+                log.info(f"Tab seçildi: {metin}")
+                return
+        except Exception:
+            continue
+
+
+def _sehir_input_bul(sayfa, tip: str):
+    """
+    Nereden/Nereye input elementini bul.
+    Strateji sırası:
+    1. JS ile label metni "Nereden"/"Nereye"ye yakın input
+    2. Bilinen name/id/placeholder selector listesi
+    3. Sayfadaki görünür text input'ların sıra indeksi
+    Bulduğu elementi döner, bulamazsa None.
+    """
     label_metin = "Nereden" if tip == "nereden" else "Nereye"
 
-    # JS ile label'a yakın visible input'u bul
-    girdi_bilgi = sayfa.evaluate(f"""
+    # ── Strateji 1: JS label proximity ───────────────────────────────────────
+    info = sayfa.evaluate(f"""
         () => {{
-            const label = Array.from(document.querySelectorAll('*'))
+            // Tüm visible elemanlar içinde exact metin eşleşmesi
+            const lbl = Array.from(document.querySelectorAll('label,th,td,div,span,p'))
                 .find(el => el.offsetParent !== null
-                    && el.childNodes.length > 0
-                    && el.innerText
-                    && el.innerText.trim() === '{label_metin}'
-                    && !['INPUT','SELECT','TEXTAREA'].includes(el.tagName));
-            if (!label) return null;
-            // label'ın parent'ından veya yakın sibling'dan input ara
-            const container = label.closest('td, div, tr, form') || label.parentElement;
-            if (!container) return null;
-            const inp = container.querySelector('input:not([type=hidden])');
-            if (inp && inp.offsetParent !== null) {{
-                return {{name: inp.name, id: inp.id, sel: 'byLabel'}};
+                    && el.innerText && el.innerText.trim() === '{label_metin}');
+            if (!lbl) return null;
+
+            // label[for] → doğrudan input
+            if (lbl.tagName === 'LABEL' && lbl.htmlFor) {{
+                const inp = document.getElementById(lbl.htmlFor);
+                if (inp && inp.type !== 'hidden') return {{id: inp.id, name: inp.name, via:'label[for]'}};
             }}
-            // label'ın parentElement'inden sonra gelen input
-            let sib = label.nextElementSibling;
-            for (let i = 0; i < 5 && sib; i++, sib = sib.nextElementSibling) {{
-                if (sib.tagName === 'INPUT' && sib.type !== 'hidden' && sib.offsetParent !== null)
-                    return {{name: sib.name, id: sib.id, sel: 'sibling'}};
-                const inp2 = sib.querySelector && sib.querySelector('input:not([type=hidden])');
-                if (inp2 && inp2.offsetParent !== null)
-                    return {{name: inp2.name, id: inp2.id, sel: 'siblingChild'}};
+
+            // Aynı kapsayıcı içindeki ilk input
+            for (const scope of [lbl.parentElement, lbl.closest('td'), lbl.closest('div'), lbl.closest('tr')]) {{
+                if (!scope) continue;
+                for (const inp of scope.querySelectorAll('input:not([type=hidden])')) {{
+                    if (inp.offsetParent !== null) return {{id: inp.id, name: inp.name, via:'scope'}};
+                }}
+            }}
+
+            // Sonraki sibling'larda input ara (max 5 adım)
+            let cur = lbl.nextElementSibling;
+            for (let i=0; i<5 && cur; i++, cur=cur.nextElementSibling) {{
+                if (cur.tagName==='INPUT' && cur.type!=='hidden' && cur.offsetParent!==null)
+                    return {{id: cur.id, name: cur.name, via:'nextSibling'}};
+                const inp = cur.querySelector && cur.querySelector('input:not([type=hidden])');
+                if (inp && inp.offsetParent!==null) return {{id: inp.id, name: inp.name, via:'siblingChild'}};
             }}
             return null;
         }}
     """)
 
-    girdi = None
-    if girdi_bilgi:
-        sel = None
-        if girdi_bilgi.get("id"):
-            sel = f"input[id='{girdi_bilgi['id']}']"
-        elif girdi_bilgi.get("name"):
-            sel = f"input[name='{girdi_bilgi['name']}']"
-        if sel:
-            try:
-                el = sayfa.query_selector(sel)
-                if el and el.is_visible():
-                    girdi = el
-                    log.info(f"Şehir alanı JS ile bulundu ({tip}): {sel} ({girdi_bilgi['sel']})")
-            except Exception:
-                pass
+    if info:
+        for attr in ['id', 'name']:
+            v = info.get(attr)
+            if v:
+                sel = f"input[{attr}='{v}']"
+                try:
+                    el = sayfa.query_selector(sel)
+                    if el and el.is_visible():
+                        log.info(f"Şehir input ({tip}) JS ile bulundu: {sel} via={info.get('via')}")
+                        return el
+                except Exception:
+                    pass
 
-    # JS başarısız → sıralı selector dene
-    if not girdi:
-        if tip == "nereden":
-            adaylar = ["input[name='ORIGIN']","input[name='origin']","input[name='ORGIN']",
-                       "input[id*='rigin']","input[id*='from']","input[id*='From']",
-                       "input[placeholder*='Nereden']","input[placeholder*='Kalkış']"]
-        else:
-            adaylar = ["input[name='DESTINATION']","input[name='destination']","input[name='DEST']",
-                       "input[id*='estination']","input[id*='to']","input[id*='To']",
-                       "input[placeholder*='Nereye']","input[placeholder*='Varış']"]
-        for sel in adaylar:
-            try:
-                el = sayfa.query_selector(sel)
-                if el and el.is_visible():
-                    girdi = el
-                    log.info(f"Şehir alanı bulundu ({tip}): {sel}")
-                    break
-            except Exception:
-                continue
-
-    if not girdi:
-        # Son çare: visible text input'ların index'i (nereden=0, nereye=1)
-        idx = 0 if tip == "nereden" else 1
+    # ── Strateji 2: Bilinen selector listesi ─────────────────────────────────
+    if tip == "nereden":
+        adaylar = [
+            "input[name='ORIGIN_CITY']","input[name='originCity']",
+            "input[name='ORIGIN']","input[name='origin']",
+            "input[name='FROM']","input[name='from']",
+            "input[name='KALKIS']","input[name='kalkis']",
+            "input[id*='rigin']","input[id*='Origin']",
+            "input[id*='from']","input[id*='From']",
+            "input[id*='kalkis']","input[id*='Kalkis']",
+            "input[placeholder*='Nereden']","input[placeholder*='nereden']",
+            "input[placeholder*='Kalkış']","input[placeholder*='kalkış']",
+        ]
+    else:
+        adaylar = [
+            "input[name='DESTINATION_CITY']","input[name='destinationCity']",
+            "input[name='DESTINATION']","input[name='destination']",
+            "input[name='DEST']","input[name='dest']",
+            "input[name='TO']","input[name='to']",
+            "input[name='VARIS']","input[name='varis']",
+            "input[id*='estination']","input[id*='Destination']",
+            "input[id*='to']","input[id*='To']",
+            "input[id*='varis']","input[id*='Varis']",
+            "input[placeholder*='Nereye']","input[placeholder*='nereye']",
+            "input[placeholder*='Varış']","input[placeholder*='varış']",
+        ]
+    for sel in adaylar:
         try:
-            tum = sayfa.query_selector_all("input[type='text']:visible, input:not([type]):visible")
-            if len(tum) > idx:
-                girdi = tum[idx]
-                log.info(f"Şehir alanı index ile bulundu ({tip}): idx={idx}")
+            el = sayfa.query_selector(sel)
+            if el and el.is_visible():
+                log.info(f"Şehir input ({tip}) selector ile bulundu: {sel}")
+                return el
         except Exception:
-            pass
+            continue
+
+    # ── Strateji 3: Sayfadaki tüm görünür text input'lar — sıra indexi ───────
+    idx = 0 if tip == "nereden" else 1
+    try:
+        tum = sayfa.evaluate("""
+            () => Array.from(document.querySelectorAll('input'))
+                .filter(el => el.offsetParent !== null
+                    && el.type !== 'hidden'
+                    && el.type !== 'submit'
+                    && el.type !== 'checkbox'
+                    && el.type !== 'radio'
+                    && el.type !== 'button')
+                .map(el => ({id: el.id, name: el.name}))
+        """)
+        if len(tum) > idx:
+            info2 = tum[idx]
+            for attr in ['id', 'name']:
+                v = info2.get(attr)
+                if v:
+                    sel = f"input[{attr}='{v}']"
+                    el = sayfa.query_selector(sel)
+                    if el and el.is_visible():
+                        log.info(f"Şehir input ({tip}) index={idx} ile bulundu: {sel}")
+                        return el
+    except Exception:
+        pass
+
+    log.warning(f"Şehir input bulunamadı ({tip})")
+    return None
+
+
+def _sehir_sec(sayfa, iata: str, tip: str):
+    arama = SEHIR_ARAMA.get(iata, iata)
+    girdi = _sehir_input_bul(sayfa, tip)
 
     if not girdi:
         log.warning(f"Şehir alanı bulunamadı ({tip}-{iata}), atlıyorum")
         return
 
     try:
+        # ── Tıkla ve temizle ─────────────────────────────────────────────────
         girdi.click()
-        _bekle(0.4, 0.7)
+        _bekle(0.3, 0.5)
         girdi.triple_click()
+        _bekle(0.1, 0.2)
+
+        # ── Yaz (jQuery autocomplete'i hem native hem jQuery event tetikler) ──
+        # Önce native fill, sonra karakter karakter type
+        girdi.fill("")
         girdi.type(arama, delay=80)
+
+        # jQuery autocomplete tetikle (varsa)
+        try:
+            sayfa.evaluate(f"""
+                () => {{
+                    const el = document.activeElement;
+                    if (!el) return;
+                    // jQuery UI autocomplete search
+                    if (window.$ && $(el).data('ui-autocomplete')) {{
+                        $(el).autocomplete('search', {repr(arama)});
+                    }}
+                    // keyup / input event tetikle
+                    ['input','keyup','keydown'].forEach(ev => {{
+                        el.dispatchEvent(new Event(ev, {{bubbles:true}}));
+                    }});
+                }}
+            """)
+        except Exception:
+            pass
+
         _bekle(1.5, 2.5)
 
-        # Autocomplete dropdown'dan seç
+        # ── Dropdown/autocomplete listesinden seç ────────────────────────────
         dd_sels = [
-            "li[class*='ui-menu-item']:first-child",
-            "[class*='suggestion'] li:first-child",
-            "[class*='autocomplete'] li:first-child",
-            "ul[class*='auto'] li:first-child",
+            ".ui-autocomplete li.ui-menu-item:first-child",
+            "ul.ui-autocomplete li:first-child",
             "[class*='ui-autocomplete'] li:first-child",
-            "[class*='dropdown-menu'] li:first-child",
-            ".pac-item:first-child",
+            "[class*='autocomplete-results'] li:first-child",
+            "[class*='autocomplete-dropdown'] li:first-child",
+            "[class*='suggestion-list'] li:first-child",
+            "[class*='suggestions'] li:first-child",
+            "[class*='dropdown-menu'] li:not(.disabled):first-child",
+            "[class*='search-results'] li:first-child",
+            "ul[role='listbox'] li:first-child",
+            "[role='option']:first-child",
         ]
         secildi = False
         for dd in dd_sels:
             try:
-                sayfa.wait_for_selector(dd, timeout=3000, state="visible")
+                sayfa.wait_for_selector(dd, timeout=2500, state="visible")
                 sayfa.click(dd)
                 secildi = True
-                log.info(f"Dropdown seçildi: {dd}")
+                log.info(f"Şehir dropdown seçildi ({tip}): {dd}")
                 break
             except Exception:
                 continue
 
         if not secildi:
-            # ArrowDown ile ilk öneriye git, Enter ile seç
+            # ArrowDown → Enter (evrensel fallback)
             sayfa.keyboard.press("ArrowDown")
             _bekle(0.3, 0.5)
             sayfa.keyboard.press("Enter")
-            log.info("Şehir ArrowDown+Enter ile seçildi")
+            log.info(f"Şehir ArrowDown+Enter ile seçildi ({tip})")
 
-        log.info(f"Şehir seçildi: {arama} ({tip})")
+        _bekle(0.5, 1)
+        log.info(f"Şehir seçildi: {arama} ({iata}-{tip})")
+
     except Exception as e:
         log.warning(f"Şehir seçim hatası ({tip}-{iata}): {e}")
 
@@ -551,63 +648,102 @@ def _tarih_sec(sayfa, tarih: str, tip: str):
         p = tarih.split("-")
         if len(p) != 3:
             return
-        gun, ay, yil = int(p[2]), int(p[1]), int(p[0])
+        # tarih formatı: YYYY-MM-DD
+        yil, ay, gun = int(p[0]), int(p[1]), int(p[2])
+        tarih_str = f"{gun:02d}/{ay:02d}/{yil}"  # DD/MM/YYYY
 
-        # Tarih alanı selector'ları — screenshottaki "Gidiş Tarihi" dropdown
+        # ── Tarih input'unu bul ───────────────────────────────────────────────
         if tip == "gidis":
             adaylar = [
-                "input[id*='depart']", "input[name*='depart']",
-                "input[id*='Depart']", "input[name*='Depart']",
-                "input[id*='DEPART']", "input[name*='DEPART']",
-                "input[id*='gidis']", "input[name*='gidis']",
-                "input[placeholder*='Gidiş']", "input[placeholder*='Kalkış']",
-                "input[id*='date']", "input[name*='date']",
-                "input[id*='DATE']", "input[name*='DATE']",
+                "input[name='DEPARTURE_DATE']","input[name='departureDate']",
+                "input[name='DEPART_DATE']","input[name='departDate']",
+                "input[name='DEPART']","input[name='depart']",
+                "input[name='GIDIS_TARIHI']","input[name='gidisTarihi']",
+                "input[name='DATE']","input[name='date']",
+                "input[id*='depart']","input[id*='Depart']","input[id*='DEPART']",
+                "input[id*='gidis']","input[id*='date']","input[id*='Date']",
+                "input[placeholder*='Gidiş']","input[placeholder*='gidiş']",
+                "input[placeholder*='Kalkış']",
             ]
+            label_ara = "Gidiş Tarihi"
         else:
             adaylar = [
-                "input[id*='return']", "input[name*='return']",
-                "input[id*='Return']", "input[name*='Return']",
-                "input[id*='RETURN']", "input[name*='RETURN']",
-                "input[id*='donus']", "input[name*='donus']",
-                "input[placeholder*='Dönüş']",
+                "input[name='RETURN_DATE']","input[name='returnDate']",
+                "input[name='RETURN']","input[name='return']",
+                "input[name='DONUS_TARIHI']","input[name='donusTarihi']",
+                "input[id*='return']","input[id*='Return']","input[id*='RETURN']",
+                "input[id*='donus']","input[id*='Donus']",
+                "input[placeholder*='Dönüş']","input[placeholder*='dönüş']",
             ]
+            label_ara = "Dönüş Tarihi"
 
-        tiklandi = False
+        girdi = None
         for sel in adaylar:
             try:
                 el = sayfa.query_selector(sel)
                 if el and el.is_visible():
-                    el.click()
-                    log.info(f"Tarih alanı tıklandı ({tip}): {sel}")
-                    tiklandi = True
+                    girdi = el
+                    log.info(f"Tarih input ({tip}): {sel}")
                     break
             except Exception:
                 continue
 
-        if not tiklandi:
-            # JS ile "Gidiş Tarihi" / "Dönüş Tarihi" label'ına yakın input bul
-            label_metin = "Gidiş Tarihi" if tip == "gidis" else "Dönüş Tarihi"
-            tiklandi = sayfa.evaluate(f"""
+        # JS label proximity fallback
+        if not girdi:
+            info = sayfa.evaluate(f"""
                 () => {{
                     const lbl = Array.from(document.querySelectorAll('*'))
-                        .find(el => el.offsetParent !== null && el.innerText && el.innerText.trim().startsWith('{label_metin}'));
-                    if (!lbl) return false;
-                    const cont = lbl.closest('div, td, tr') || lbl.parentElement;
-                    const inp = cont && cont.querySelector('input');
-                    if (inp) {{ inp.click(); return true; }}
-                    return false;
+                        .find(el => el.offsetParent!==null && el.innerText
+                            && el.innerText.trim().startsWith('{label_ara}')
+                            && !['INPUT','SELECT'].includes(el.tagName));
+                    if (!lbl) return null;
+                    for (const scope of [lbl.parentElement, lbl.closest('td'), lbl.closest('div'), lbl.closest('tr')]) {{
+                        if (!scope) continue;
+                        const inp = scope.querySelector('input:not([type=hidden])');
+                        if (inp && inp.offsetParent!==null) return {{id:inp.id, name:inp.name}};
+                    }}
+                    return null;
                 }}
             """)
-            if tiklandi:
-                log.info(f"Tarih alanı JS ile tıklandı ({tip})")
+            if info:
+                for attr in ['id','name']:
+                    v = info.get(attr)
+                    if v:
+                        el = sayfa.query_selector(f"input[{attr}='{v}']")
+                        if el and el.is_visible():
+                            girdi = el
+                            log.info(f"Tarih input ({tip}) JS ile bulundu: {attr}={v}")
+                            break
 
-        if not tiklandi:
+        if not girdi:
             log.warning(f"Tarih alanı bulunamadı ({tip}), atlıyorum")
             return
 
-        _bekle(1, 2)
+        # ── Direkt değer yaz (masked input desteği) ──────────────────────────
+        try:
+            girdi.click()
+            _bekle(0.3, 0.5)
+            # Masked input için triple_click + type
+            girdi.triple_click()
+            girdi.type(tarih_str, delay=60)
+            sayfa.keyboard.press("Tab")
+            _bekle(0.5, 1)
+            # Değer settiyse takvim açılmadı demektir — kontrol et
+            deger = girdi.input_value()
+            if tarih_str in deger or str(gun) in deger:
+                log.info(f"Tarih direkt yazıldı ({tip}): {tarih_str}")
+                return
+        except Exception:
+            pass
+
+        # ── Takvim popup ile seç ─────────────────────────────────────────────
+        try:
+            girdi.click()
+            _bekle(1, 1.5)
+        except Exception:
+            pass
         _takvim_sec(sayfa, gun, ay, yil)
+
     except Exception as e:
         log.warning(f"Tarih hatası ({tip}): {e}")
 
@@ -615,15 +751,53 @@ def _tarih_sec(sayfa, tarih: str, tip: str):
 def _takvim_sec(sayfa, gun: int, ay: int, yil: int):
     AYLAR = {1:"Ocak",2:"Şubat",3:"Mart",4:"Nisan",5:"Mayıs",6:"Haziran",
               7:"Temmuz",8:"Ağustos",9:"Eylül",10:"Ekim",11:"Kasım",12:"Aralık"}
+
+    BASLIK_SELS = [
+        "[class*='calendar-caption']",
+        "[class*='datepicker-title']",
+        "[class*='datepicker-switch']",
+        "th[class*='month']",
+        ".ui-datepicker-title",
+        "[class*='month-title']",
+        "[class*='cal-header']",
+    ]
+    ILERI_SELS = [
+        "[class*='calendar'] [class*='next']",
+        ".ui-datepicker-next",
+        "th[class*='next']",
+        "button[class*='next']",
+        "a[class*='next']",
+        "[title*='Sonraki']","[title*='Next']","[title*='İleri']",
+        "button:has-text('>')","a:has-text('>')","span:has-text('>')",
+    ]
+    GUN_SELS = [
+        "[class*='datepicker'] td a:not([class*='disabled'])",
+        "[class*='datepicker'] td:not([class*='disabled']):not([class*='empty'])",
+        "[class*='calendar'] td:not([class*='disabled']):not([class*='empty'])",
+        ".ui-datepicker td:not(.ui-datepicker-unselectable) a",
+        ".ui-datepicker td:not(.ui-datepicker-unselectable)",
+        "table[class*='cal'] td:not([class*='off'])",
+    ]
+
     try:
-        for _ in range(24):
-            _bekle(0.5, 1)
-            baslik = sayfa.query_selector(
-                "[class*='calendar-caption'], th[class*='month'], [class*='datepicker-title']"
-            )
-            if not baslik:
+        _bekle(1, 1.5)
+        for _ in range(36):  # max 36 ay ileri
+            # Başlık bul
+            baslik_el = None
+            for bsel in BASLIK_SELS:
+                try:
+                    el = sayfa.query_selector(bsel)
+                    if el and el.is_visible():
+                        baslik_el = el
+                        break
+                except Exception:
+                    continue
+
+            if not baslik_el:
+                log.warning("Takvim başlığı bulunamadı")
                 break
-            metin = baslik.inner_text()
+
+            metin = baslik_el.inner_text().strip()
             m_ay = m_yil = None
             for no, ad in AYLAR.items():
                 if ad in metin:
@@ -632,74 +806,183 @@ def _takvim_sec(sayfa, gun: int, ay: int, yil: int):
                     if y:
                         m_yil = int(y.group())
                     break
+
             if m_ay == ay and m_yil == yil:
-                gunler = sayfa.query_selector_all(
-                    "[class*='calendar'] td:not([class*='disabled']):not([class*='empty']), "
-                    "[class*='datepicker'] td:not([class*='disabled'])"
-                )
-                for g in gunler:
-                    if g.inner_text().strip() == str(gun):
-                        g.click()
-                        log.info(f"Tarih: {gun}.{ay}.{yil}")
-                        return
-            try:
-                sayfa.click("[class*='calendar'] [class*='next'], th[class*='next'], button:has-text('>')")
-            except Exception:
+                # Doğru ay — günü bul
+                for gsel in GUN_SELS:
+                    try:
+                        gunler = sayfa.query_selector_all(gsel)
+                        for g in gunler:
+                            try:
+                                txt = g.inner_text().strip()
+                                if txt == str(gun):
+                                    g.click()
+                                    log.info(f"Tarih takvimden seçildi: {gun}.{ay}.{yil}")
+                                    _bekle(0.5, 1)
+                                    return
+                            except Exception:
+                                continue
+                    except Exception:
+                        continue
+                log.warning(f"Gün {gun} takvimde bulunamadı")
                 break
+
+            # Bir sonraki aya geç
+            gecildi = False
+            for isel in ILERI_SELS:
+                try:
+                    el = sayfa.query_selector(isel)
+                    if el and el.is_visible():
+                        el.click()
+                        _bekle(0.4, 0.8)
+                        gecildi = True
+                        break
+                except Exception:
+                    continue
+            if not gecildi:
+                log.warning("Takvim ileri butonu bulunamadı")
+                break
+
     except Exception as e:
         log.warning(f"Takvim hatası: {e}")
 
 
 def _yolcu_sec(sayfa, yetiskin: int, cocuk: int, bebek: int):
-    """Screenshottaki: '1 Kişi', '0 Çocuk', '0 Bebek' select dropdown'ları"""
-    # Tüm visible select'leri al
-    def _select_dene(adaylar: list, deger: str, value: str = None):
+    """
+    Screenshottaki 3 select dropdown: '1 Kişi', '0 Çocuk', '0 Bebek'
+    Strateji: selector listesi → JS label proximity → index fallback
+    """
+
+    def _select_sec(adaylar: list, label_ara: str, deger_label: str, deger_idx: int):
+        """Select'i bul ve istenen değeri seç."""
+        girdi = None
+
+        # Selector listesini dene
         for sel in adaylar:
             try:
                 el = sayfa.query_selector(sel)
                 if el and el.is_visible():
-                    if value:
-                        sayfa.select_option(sel, value=value)
-                    else:
-                        sayfa.select_option(sel, label=deger)
-                    log.info(f"Select seçildi: {sel} = {deger}")
-                    return True
+                    girdi = el
+                    log.info(f"Select bulundu: {sel}")
+                    break
             except Exception:
-                try:
-                    if value:
-                        sayfa.select_option(sel, value=value)
-                    else:
-                        sayfa.select_option(sel, label=deger)
-                    return True
-                except Exception:
-                    continue
-        return False
+                continue
+
+        # JS label proximity
+        if not girdi:
+            info = sayfa.evaluate(f"""
+                () => {{
+                    const lbl = Array.from(document.querySelectorAll('*'))
+                        .find(el => el.offsetParent!==null && el.innerText
+                            && el.innerText.trim().includes('{label_ara}')
+                            && el.tagName!=='SELECT');
+                    if (!lbl) return null;
+                    for (const scope of [lbl.parentElement, lbl.closest('td'), lbl.closest('div'), lbl.closest('tr')]) {{
+                        if (!scope) continue;
+                        const sel = scope.querySelector('select');
+                        if (sel && sel.offsetParent!==null) return {{id:sel.id, name:sel.name}};
+                    }}
+                    return null;
+                }}
+            """)
+            if info:
+                for attr in ['id','name']:
+                    v = info.get(attr)
+                    if v:
+                        el = sayfa.query_selector(f"select[{attr}='{v}']")
+                        if el and el.is_visible():
+                            girdi = el
+                            log.info(f"Select JS ile bulundu: {attr}={v}")
+                            break
+
+        # Index fallback — sayfadaki kaçıncı select
+        if not girdi:
+            try:
+                tum = sayfa.query_selector_all("select")
+                vis = [el for el in tum if el.is_visible()]
+                if len(vis) > deger_idx:
+                    girdi = vis[deger_idx]
+                    log.info(f"Select index={deger_idx} ile bulundu")
+            except Exception:
+                pass
+
+        if not girdi:
+            log.warning(f"Select bulunamadı: {label_ara}")
+            return
+
+        # Değeri seç — label ile, başarısızsa index ile
+        try:
+            girdi.select_option(label=deger_label)
+            log.info(f"Select seçildi (label): {deger_label}")
+            return
+        except Exception:
+            pass
+        try:
+            girdi.select_option(index=deger_idx)
+            log.info(f"Select seçildi (index): {deger_idx}")
+        except Exception as e:
+            log.warning(f"Select seçim hatası ({label_ara}): {e}")
 
     try:
-        # Yetişkin: "1 Kişi", "2 Kişi" vb.
-        _select_dene(
-            ["select[id*='adult']","select[name*='adult']","select[id*='ADULT']",
-             "select[name*='ADULT']","select[id*='pax']","select[name*='pax']",
+        _select_sec(
+            ["select[name*='ADULT']","select[name*='adult']","select[name*='PAX']",
+             "select[name*='pax']","select[id*='adult']","select[id*='ADULT']",
              "select[id*='kisi']","select[name*='kisi']"],
-            f"{yetiskin} Kişi"
+            "Kişi", f"{yetiskin} Kişi", yetiskin - 1
         )
         _bekle(0.3, 0.5)
-        # Çocuk: "0 Çocuk", "1 Çocuk" vb.
-        _select_dene(
-            ["select[id*='child']","select[name*='child']","select[id*='CHILD']",
-             "select[name*='CHILD']","select[id*='cocuk']","select[name*='cocuk']"],
-            f"{cocuk} Çocuk"
+        _select_sec(
+            ["select[name*='CHILD']","select[name*='child']","select[id*='child']",
+             "select[id*='CHILD']","select[name*='cocuk']","select[id*='cocuk']"],
+            "Çocuk", f"{cocuk} Çocuk", cocuk
         )
         _bekle(0.3, 0.5)
-        # Bebek: "0 Bebek", "1 Bebek" vb.
-        _select_dene(
-            ["select[id*='infant']","select[name*='infant']","select[id*='INFANT']",
-             "select[name*='INFANT']","select[id*='bebek']","select[name*='bebek']"],
-            f"{bebek} Bebek"
+        _select_sec(
+            ["select[name*='INFANT']","select[name*='infant']","select[id*='infant']",
+             "select[id*='INFANT']","select[name*='bebek']","select[id*='bebek']"],
+            "Bebek", f"{bebek} Bebek", bebek
         )
-        log.info(f"Yolcu: {yetiskin}Y {cocuk}Ç {bebek}B")
+        log.info(f"Yolcu seçildi: {yetiskin}Y {cocuk}Ç {bebek}B")
     except Exception as e:
         log.warning(f"Yolcu hatası: {e}")
+
+
+def _ara_tikla(sayfa):
+    """Form submit — Ara butonu."""
+    adaylar = [
+        "input[value='Ara']","input[value='ARA']",
+        "button:has-text('Ara')","a:has-text('Ara')",
+        "input[type='submit']","button[type='submit']",
+        "[class*='search-btn']","[class*='searchBtn']",
+        "[class*='ara-btn']","[onclick*='ara']","[onclick*='Ara']",
+    ]
+    for sel in adaylar:
+        try:
+            el = sayfa.query_selector(sel)
+            if el and el.is_visible():
+                el.click()
+                log.info(f"Ara tıklandı: {sel}")
+                return
+        except Exception:
+            continue
+
+    # JS ile form submit
+    try:
+        ok = sayfa.evaluate("""
+            () => {
+                // submit type olan herhangi bir şeye tıkla
+                const btn = document.querySelector(
+                    'input[type=submit], button[type=submit], button'
+                );
+                if (btn) { btn.click(); return btn.value || btn.innerText || 'btn'; }
+                const frm = document.querySelector('form');
+                if (frm) { frm.submit(); return 'form.submit'; }
+                return null;
+            }
+        """)
+        log.info(f"Ara JS ile gönderildi: {ok}")
+    except Exception as e:
+        log.warning(f"Ara butonu bulunamadı: {e}")
 
 
 def _sonuclari_oku(sayfa, nereden, nereye, direkt_mi, cfg) -> list:
