@@ -376,7 +376,23 @@ def pegasus_ucus_sorgula(sayfa, komut: dict) -> list:
         _yolcu_sec(sayfa, yetiskin, cocuk, bebek)
         _bekle(1, 2)
 
-        sayfa.click("button:has-text('Ara'), input[value='Ara']")
+        # "Ara" butonu — sarı submit butonu
+        ara_secildi = False
+        for sel in ["input[value='Ara']", "button:has-text('Ara')",
+                    "input[type='submit']", "button[type='submit']",
+                    "a:has-text('Ara')"]:
+            try:
+                el = sayfa.query_selector(sel)
+                if el and el.is_visible():
+                    el.click()
+                    log.info(f"Ara butonu tıklandı: {sel}")
+                    ara_secildi = True
+                    break
+            except Exception:
+                continue
+        if not ara_secildi:
+            sayfa.evaluate("() => { const f = document.querySelector('form'); if(f) f.submit(); }")
+            log.info("Ara — form.submit()")
         _bekle(3, 5)
 
         # Uyarı popup
@@ -405,34 +421,84 @@ def pegasus_ucus_sorgula(sayfa, komut: dict) -> list:
 
 def _sehir_sec(sayfa, iata: str, tip: str):
     arama = SEHIR_ARAMA.get(iata, iata)
-    # Sırayla denenecek selector'lar
-    if tip == "nereden":
-        adaylar = [
-            "input[name='ORIGIN']", "input[name='origin']",
-            "input[id*='origin']", "input[id*='Origin']",
-            "input[id*='from']", "input[id*='From']",
-            "input[placeholder*='Nereden']", "input[placeholder*='nereden']",
-            "input[placeholder*='Kalkış']",
-        ]
-    else:
-        adaylar = [
-            "input[name='DESTINATION']", "input[name='destination']",
-            "input[id*='destination']", "input[id*='Destination']",
-            "input[id*='to']", "input[id*='To']",
-            "input[placeholder*='Nereye']", "input[placeholder*='nereye']",
-            "input[placeholder*='Varış']",
-        ]
+    label_metin = "Nereden" if tip == "nereden" else "Nereye"
+
+    # JS ile label'a yakın visible input'u bul
+    girdi_bilgi = sayfa.evaluate(f"""
+        () => {{
+            const label = Array.from(document.querySelectorAll('*'))
+                .find(el => el.offsetParent !== null
+                    && el.childNodes.length > 0
+                    && el.innerText
+                    && el.innerText.trim() === '{label_metin}'
+                    && !['INPUT','SELECT','TEXTAREA'].includes(el.tagName));
+            if (!label) return null;
+            // label'ın parent'ından veya yakın sibling'dan input ara
+            const container = label.closest('td, div, tr, form') || label.parentElement;
+            if (!container) return null;
+            const inp = container.querySelector('input:not([type=hidden])');
+            if (inp && inp.offsetParent !== null) {{
+                return {{name: inp.name, id: inp.id, sel: 'byLabel'}};
+            }}
+            // label'ın parentElement'inden sonra gelen input
+            let sib = label.nextElementSibling;
+            for (let i = 0; i < 5 && sib; i++, sib = sib.nextElementSibling) {{
+                if (sib.tagName === 'INPUT' && sib.type !== 'hidden' && sib.offsetParent !== null)
+                    return {{name: sib.name, id: sib.id, sel: 'sibling'}};
+                const inp2 = sib.querySelector && sib.querySelector('input:not([type=hidden])');
+                if (inp2 && inp2.offsetParent !== null)
+                    return {{name: inp2.name, id: inp2.id, sel: 'siblingChild'}};
+            }}
+            return null;
+        }}
+    """)
 
     girdi = None
-    for sel in adaylar:
+    if girdi_bilgi:
+        sel = None
+        if girdi_bilgi.get("id"):
+            sel = f"input[id='{girdi_bilgi['id']}']"
+        elif girdi_bilgi.get("name"):
+            sel = f"input[name='{girdi_bilgi['name']}']"
+        if sel:
+            try:
+                el = sayfa.query_selector(sel)
+                if el and el.is_visible():
+                    girdi = el
+                    log.info(f"Şehir alanı JS ile bulundu ({tip}): {sel} ({girdi_bilgi['sel']})")
+            except Exception:
+                pass
+
+    # JS başarısız → sıralı selector dene
+    if not girdi:
+        if tip == "nereden":
+            adaylar = ["input[name='ORIGIN']","input[name='origin']","input[name='ORGIN']",
+                       "input[id*='rigin']","input[id*='from']","input[id*='From']",
+                       "input[placeholder*='Nereden']","input[placeholder*='Kalkış']"]
+        else:
+            adaylar = ["input[name='DESTINATION']","input[name='destination']","input[name='DEST']",
+                       "input[id*='estination']","input[id*='to']","input[id*='To']",
+                       "input[placeholder*='Nereye']","input[placeholder*='Varış']"]
+        for sel in adaylar:
+            try:
+                el = sayfa.query_selector(sel)
+                if el and el.is_visible():
+                    girdi = el
+                    log.info(f"Şehir alanı bulundu ({tip}): {sel}")
+                    break
+            except Exception:
+                continue
+
+    if not girdi:
+        # Son çare: visible text input'ların index'i (nereden=0, nereye=1)
+        idx = 0 if tip == "nereden" else 1
         try:
-            el = sayfa.query_selector(sel)
-            if el and el.is_visible():
-                girdi = el
-                log.info(f"Şehir alanı bulundu ({tip}): {sel}")
-                break
+            tum = sayfa.query_selector_all("input[type='text']:visible, input:not([type]):visible")
+            if len(tum) > idx:
+                girdi = tum[idx]
+                log.info(f"Şehir alanı index ile bulundu ({tip}): idx={idx}")
         except Exception:
-            continue
+            pass
 
     if not girdi:
         log.warning(f"Şehir alanı bulunamadı ({tip}-{iata}), atlıyorum")
@@ -440,33 +506,38 @@ def _sehir_sec(sayfa, iata: str, tip: str):
 
     try:
         girdi.click()
-        _bekle(0.3, 0.5)
-        girdi.fill("")
-        girdi.type(arama, delay=100)
-        _bekle(1, 2)
+        _bekle(0.4, 0.7)
+        girdi.triple_click()
+        girdi.type(arama, delay=80)
+        _bekle(1.5, 2.5)
 
-        # Dropdown bekle ve seç
+        # Autocomplete dropdown'dan seç
         dd_sels = [
+            "li[class*='ui-menu-item']:first-child",
             "[class*='suggestion'] li:first-child",
             "[class*='autocomplete'] li:first-child",
             "ul[class*='auto'] li:first-child",
-            "[class*='dropdown'] li:first-child",
-            "li[class*='result']:first-child",
+            "[class*='ui-autocomplete'] li:first-child",
+            "[class*='dropdown-menu'] li:first-child",
+            ".pac-item:first-child",
         ]
         secildi = False
         for dd in dd_sels:
             try:
-                sayfa.wait_for_selector(dd, timeout=3000)
+                sayfa.wait_for_selector(dd, timeout=3000, state="visible")
                 sayfa.click(dd)
                 secildi = True
+                log.info(f"Dropdown seçildi: {dd}")
                 break
             except Exception:
                 continue
 
         if not secildi:
+            # ArrowDown ile ilk öneriye git, Enter ile seç
             sayfa.keyboard.press("ArrowDown")
             _bekle(0.3, 0.5)
             sayfa.keyboard.press("Enter")
+            log.info("Şehir ArrowDown+Enter ile seçildi")
 
         log.info(f"Şehir seçildi: {arama} ({tip})")
     except Exception as e:
@@ -481,11 +552,60 @@ def _tarih_sec(sayfa, tarih: str, tip: str):
         if len(p) != 3:
             return
         gun, ay, yil = int(p[2]), int(p[1]), int(p[0])
+
+        # Tarih alanı selector'ları — screenshottaki "Gidiş Tarihi" dropdown
         if tip == "gidis":
-            sel = "input[id*='depart'], input[name*='depart'], input[placeholder*='Gidiş']"
+            adaylar = [
+                "input[id*='depart']", "input[name*='depart']",
+                "input[id*='Depart']", "input[name*='Depart']",
+                "input[id*='DEPART']", "input[name*='DEPART']",
+                "input[id*='gidis']", "input[name*='gidis']",
+                "input[placeholder*='Gidiş']", "input[placeholder*='Kalkış']",
+                "input[id*='date']", "input[name*='date']",
+                "input[id*='DATE']", "input[name*='DATE']",
+            ]
         else:
-            sel = "input[id*='return'], input[name*='return'], input[placeholder*='Dönüş']"
-        sayfa.click(sel)
+            adaylar = [
+                "input[id*='return']", "input[name*='return']",
+                "input[id*='Return']", "input[name*='Return']",
+                "input[id*='RETURN']", "input[name*='RETURN']",
+                "input[id*='donus']", "input[name*='donus']",
+                "input[placeholder*='Dönüş']",
+            ]
+
+        tiklandi = False
+        for sel in adaylar:
+            try:
+                el = sayfa.query_selector(sel)
+                if el and el.is_visible():
+                    el.click()
+                    log.info(f"Tarih alanı tıklandı ({tip}): {sel}")
+                    tiklandi = True
+                    break
+            except Exception:
+                continue
+
+        if not tiklandi:
+            # JS ile "Gidiş Tarihi" / "Dönüş Tarihi" label'ına yakın input bul
+            label_metin = "Gidiş Tarihi" if tip == "gidis" else "Dönüş Tarihi"
+            tiklandi = sayfa.evaluate(f"""
+                () => {{
+                    const lbl = Array.from(document.querySelectorAll('*'))
+                        .find(el => el.offsetParent !== null && el.innerText && el.innerText.trim().startsWith('{label_metin}'));
+                    if (!lbl) return false;
+                    const cont = lbl.closest('div, td, tr') || lbl.parentElement;
+                    const inp = cont && cont.querySelector('input');
+                    if (inp) {{ inp.click(); return true; }}
+                    return false;
+                }}
+            """)
+            if tiklandi:
+                log.info(f"Tarih alanı JS ile tıklandı ({tip})")
+
+        if not tiklandi:
+            log.warning(f"Tarih alanı bulunamadı ({tip}), atlıyorum")
+            return
+
         _bekle(1, 2)
         _takvim_sec(sayfa, gun, ay, yil)
     except Exception as e:
@@ -531,21 +651,52 @@ def _takvim_sec(sayfa, gun: int, ay: int, yil: int):
 
 
 def _yolcu_sec(sayfa, yetiskin: int, cocuk: int, bebek: int):
+    """Screenshottaki: '1 Kişi', '0 Çocuk', '0 Bebek' select dropdown'ları"""
+    # Tüm visible select'leri al
+    def _select_dene(adaylar: list, deger: str, value: str = None):
+        for sel in adaylar:
+            try:
+                el = sayfa.query_selector(sel)
+                if el and el.is_visible():
+                    if value:
+                        sayfa.select_option(sel, value=value)
+                    else:
+                        sayfa.select_option(sel, label=deger)
+                    log.info(f"Select seçildi: {sel} = {deger}")
+                    return True
+            except Exception:
+                try:
+                    if value:
+                        sayfa.select_option(sel, value=value)
+                    else:
+                        sayfa.select_option(sel, label=deger)
+                    return True
+                except Exception:
+                    continue
+        return False
+
     try:
-        try:
-            sayfa.select_option("select[id*='adult'], select[name*='adult']", label=f"{yetiskin} Kişi")
-        except Exception:
-            pass
+        # Yetişkin: "1 Kişi", "2 Kişi" vb.
+        _select_dene(
+            ["select[id*='adult']","select[name*='adult']","select[id*='ADULT']",
+             "select[name*='ADULT']","select[id*='pax']","select[name*='pax']",
+             "select[id*='kisi']","select[name*='kisi']"],
+            f"{yetiskin} Kişi"
+        )
         _bekle(0.3, 0.5)
-        try:
-            sayfa.select_option("select[id*='child'], select[name*='child']", label=f"{cocuk} Çocuk")
-        except Exception:
-            pass
+        # Çocuk: "0 Çocuk", "1 Çocuk" vb.
+        _select_dene(
+            ["select[id*='child']","select[name*='child']","select[id*='CHILD']",
+             "select[name*='CHILD']","select[id*='cocuk']","select[name*='cocuk']"],
+            f"{cocuk} Çocuk"
+        )
         _bekle(0.3, 0.5)
-        try:
-            sayfa.select_option("select[id*='infant'], select[name*='infant']", label=f"{bebek} Bebek")
-        except Exception:
-            pass
+        # Bebek: "0 Bebek", "1 Bebek" vb.
+        _select_dene(
+            ["select[id*='infant']","select[name*='infant']","select[id*='INFANT']",
+             "select[name*='INFANT']","select[id*='bebek']","select[name*='bebek']"],
+            f"{bebek} Bebek"
+        )
         log.info(f"Yolcu: {yetiskin}Y {cocuk}Ç {bebek}B")
     except Exception as e:
         log.warning(f"Yolcu hatası: {e}")
