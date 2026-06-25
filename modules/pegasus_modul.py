@@ -965,15 +965,44 @@ def _yolcu_sec(sayfa, yetiskin: int, cocuk: int, bebek: int):
 
 
 def _ara_tikla(sayfa):
-    """Form submit — Ara butonu."""
-    adaylar = [
-        "input[value='Ara']","input[value='ARA']",
-        "button:has-text('Ara')","a:has-text('Ara')",
-        "input[type='submit']","button[type='submit']",
-        "[class*='search-btn']","[class*='searchBtn']",
-        "[class*='ara-btn']","[onclick*='ara']","[onclick*='Ara']",
-    ]
-    for sel in adaylar:
+    """
+    Uçuş arama formunu submit et.
+    LAB_DEPPORT input'unun bulunduğu formu bul ve o formu submit et.
+    Araç kiralama gibi başka 'Ara' butonlarına BASMAMAK için form bazlı yaklaşım.
+    """
+    # ── 1. LAB_DEPPORT'un bulunduğu formu JS ile submit et ───────────────────
+    try:
+        ok = sayfa.evaluate("""
+            () => {
+                // Uçuş form inputu LAB_DEPPORT'u bul
+                const inp = document.querySelector(
+                    "input[name='LAB_DEPPORT'], input[id='LAB_DEPPORT']"
+                );
+                if (!inp) return null;
+                const frm = inp.closest('form');
+                if (!frm) return null;
+                // Form içindeki submit butonunu tıkla
+                const btn = frm.querySelector(
+                    'input[type=submit], button[type=submit], button, a[onclick]'
+                );
+                if (btn) { btn.click(); return 'form-btn:' + (btn.value||btn.innerText||'btn').trim(); }
+                frm.submit();
+                return 'form.submit';
+            }
+        """)
+        if ok:
+            log.info(f"Ara (form tabanlı): {ok}")
+            return
+    except Exception as e:
+        log.warning(f"Form submit hatası: {e}")
+
+    # ── 2. tstnm_ class'lı buton (Pegasus test name pattern) ─────────────────
+    for sel in ["[class*='tstnm_fly_search_search']","[class*='tstnm_search']",
+                "[class*='fly-search'] input[type='submit']",
+                "[class*='fly-search'] button",
+                "[class*='flight-search'] input[type='submit']",
+                "input[value='Ara']","input[value='ARA']","input[value='SEARCH']",
+                "button:has-text('Ara')"]:
         try:
             el = sayfa.query_selector(sel)
             if el and el.is_visible():
@@ -983,23 +1012,7 @@ def _ara_tikla(sayfa):
         except Exception:
             continue
 
-    # JS ile form submit
-    try:
-        ok = sayfa.evaluate("""
-            () => {
-                // submit type olan herhangi bir şeye tıkla
-                const btn = document.querySelector(
-                    'input[type=submit], button[type=submit], button'
-                );
-                if (btn) { btn.click(); return btn.value || btn.innerText || 'btn'; }
-                const frm = document.querySelector('form');
-                if (frm) { frm.submit(); return 'form.submit'; }
-                return null;
-            }
-        """)
-        log.info(f"Ara JS ile gönderildi: {ok}")
-    except Exception as e:
-        log.warning(f"Ara butonu bulunamadı: {e}")
+    log.warning("Ara butonu bulunamadı — hiçbir strateji çalışmadı")
 
 
 def _sonuclari_oku(sayfa, nereden, nereye, direkt_mi, cfg) -> list:
