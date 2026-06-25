@@ -571,69 +571,85 @@ def _sehir_input_bul(sayfa, tip: str):
 
 def _sehir_sec(sayfa, iata: str, tip: str):
     """
-    Şehir seçimi. React SelectBox için sadece gerçek Playwright/keyboard
-    event kullan — JS el.click() React synthetic event tetiklemez.
-    Strateji: yaz → dropdown li tıkla → ArrowDown+Enter → kontrol.
+    Şehir seçimi. React SelectBox — gerçek Playwright/keyboard event şart.
+    Strateji: yaz → dropdown açıldı mı kontrol et → ArrowDown+Enter (birincil)
+              → dropdown li tıkla (ikincil) → doğrula.
     """
     arama = SEHIR_ARAMA.get(iata, iata)
     inp_sel = "input[name='LAB_DEPPORT']" if tip == "nereden" else "input[name='LAB_ARRPORT']"
+    log.info(f"Şehir seçimi başlıyor: {iata}→'{arama}' ({tip}), inp={inp_sel}")
 
     try:
-        # 1. Input'u tıkla, temizle, yaz
-        sayfa.click(inp_sel, timeout=5000)
-        _bekle(0.3, 0.5)
+        # 1. Input'u tıkla ve odakla
+        sayfa.click(inp_sel, timeout=8000)
+        _bekle(0.4, 0.6)
+
+        # 2. Mevcut değeri tamamen temizle
         sayfa.keyboard.press("Control+a")
+        _bekle(0.1, 0.2)
         sayfa.keyboard.press("Delete")
         _bekle(0.1, 0.2)
-        # IATA kodunun ilk 3 harfini yaz — dropdown daha geniş arama yapar
-        arama_kisa = iata  # örn: "GZT", "SAW" — dropdown IATA'ya göre de filtreler
-        sayfa.type(inp_sel, arama_kisa, delay=100)
-        _bekle(2.0, 3.0)
+        sayfa.keyboard.press("Control+a")
+        sayfa.keyboard.press("BackSpace")
+        _bekle(0.2, 0.3)
 
-        # 2. Dropdown'daki ilk li/option'a gerçek Playwright tıklaması
-        # (React synthetic event tetikler, JS el.click() DEĞİL)
-        dropdown_sels = [
-            "[class*='SelectBox'] li:visible",
-            "[class*='selectbox'] li:visible",
-            "[class*='select-box'] li:visible",
-            "[class*='dropdown'] li:visible",
-            "[class*='Dropdown'] li:visible",
-            "[class*='option']:visible",
-            "[class*='Option']:visible",
-            "ul li:visible",
-        ]
-        secildi = False
-        for dsel in dropdown_sels:
-            try:
-                ilk = sayfa.locator(dsel).first
-                if ilk.is_visible(timeout=1000):
-                    ilk.click(timeout=2000)
-                    _bekle(0.5, 1)
-                    log.info(f"Şehir seçildi (dropdown li): {arama_kisa} ({tip})")
-                    secildi = True
-                    break
-            except Exception:
-                continue
+        # 3. Şehir adını yaz (IATA ile de dropdown açılıyor ama tam ad daha güvenli)
+        sayfa.type(inp_sel, arama, delay=80)
+        log.info(f"Şehir adı yazıldı: '{arama}'")
+        _bekle(2.5, 3.5)   # dropdown açılmasını bekle
 
-        if not secildi:
-            # 3. ArrowDown + Enter — klavye ile React dropdown navigasyonu
-            sayfa.keyboard.press("ArrowDown")
-            _bekle(0.6, 1.0)
-            sayfa.keyboard.press("Enter")
-            _bekle(0.5, 1)
-            log.info(f"Şehir seçildi (ArrowDown+Enter): {arama_kisa} ({tip})")
+        # 4. ArrowDown + Enter — klavye navigasyonu, React synthetic event tetikler
+        #    Dropdown açıkken ArrowDown ilk öğeye gider, Enter seçer.
+        sayfa.keyboard.press("ArrowDown")
+        _bekle(0.5, 0.8)
+        sayfa.keyboard.press("Enter")
+        _bekle(0.8, 1.2)
+        log.info(f"Şehir klavye ile seçildi (ArrowDown+Enter): {arama} ({tip})")
 
-        # 4. Seçim sonrası input değerini doğrula
+        # 5. Doğrula — input değeri dolduysa OK
         try:
             deger = sayfa.input_value(inp_sel)
             log.info(f"Şehir input değeri ({tip}): '{deger}'")
-            if not deger or len(deger) < 2:
-                log.warning(f"Şehir seçimi doğrulanamadı ({tip}): input boş")
+            if deger and len(deger) >= 2:
+                return  # başarılı
         except Exception:
             pass
 
+        # 6. Fallback: dropdown li elementine gerçek Playwright tıklaması
+        log.warning(f"ArrowDown+Enter sonrası input boş — dropdown li deniyor ({tip})")
+        sayfa.click(inp_sel, timeout=5000)
+        _bekle(0.3, 0.5)
+        sayfa.type(inp_sel, arama, delay=80)
+        _bekle(2.0, 3.0)
+
+        dropdown_sels = [
+            "li[class*='SelectBox']",
+            "li[class*='selectbox']",
+            "[class*='SelectBox__option']",
+            "[class*='selectBox__option']",
+            "[class*='select__option']",
+            "[role='option']",
+            "[role='listbox'] [role='option']",
+            "ul[class*='list'] li",
+            "ul[class*='List'] li",
+            ".dropdown-menu li",
+        ]
+        for dsel in dropdown_sels:
+            try:
+                ilk = sayfa.locator(dsel).first
+                if ilk.is_visible(timeout=800):
+                    ilk.click(timeout=2000)
+                    _bekle(0.5, 1)
+                    deger2 = sayfa.input_value(inp_sel)
+                    log.info(f"Şehir seçildi (dropdown li '{dsel}'): '{deger2}' ({tip})")
+                    return
+            except Exception:
+                continue
+
+        log.error(f"Şehir seçimi BAŞARISIZ ({tip}-{iata}): tüm stratejiler denendi")
+
     except Exception as e:
-        log.warning(f"Şehir seçim hatası ({tip}-{iata}): {e}")
+        log.error(f"Şehir seçim hatası ({tip}-{iata}): {e}")
 
 
 def _tarih_sec(sayfa, tarih: str, tip: str):
