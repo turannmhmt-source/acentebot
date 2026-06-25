@@ -583,17 +583,42 @@ def _sehir_sec(sayfa, iata: str, tip: str):
         sayfa.type(inp_sel, arama, delay=80)
         _bekle(2.5, 3.5)
 
-        # Playwright locator ile gerçek mouse tıklaması (React eventlerini tetikler)
-        try:
-            loc = sayfa.locator(f"text={arama}").first
-            loc.click(timeout=4000)
-            log.info(f"Şehir seçildi (locator): {arama} ({tip})")
+        # Strateji 1: Playwright locator — gerçek mouse tıklaması
+        for deneme_metin in [arama, arama.split()[0]]:  # tam metin sonra ilk kelime
+            try:
+                loc = sayfa.locator(f"text={deneme_metin}").first
+                loc.click(timeout=3000)
+                log.info(f"Şehir seçildi (locator '{deneme_metin}'): {iata} ({tip})")
+                _bekle(0.5, 1)
+                return
+            except Exception:
+                continue
+
+        # Strateji 2: Seçenek listesini JS ile tara — metin içeren ilk elemanı tıkla
+        eslesen = sayfa.evaluate(f"""
+            () => {{
+                const ara = {repr(arama.lower().split()[0])};  // İlk kelime yeterli
+                const aktif = document.activeElement;
+                for (const el of document.querySelectorAll('*')) {{
+                    if (!el.offsetParent || el === aktif) continue;
+                    if (['INPUT','SELECT','TEXTAREA','SCRIPT','STYLE','BODY','HTML','HEAD'].includes(el.tagName)) continue;
+                    const txt = (el.innerText||'').trim();
+                    const lines = txt.split('\\n').filter(l => l.trim());
+                    if (lines.length < 1 || lines.length > 3) continue;
+                    if (txt.toLowerCase().includes(ara)) {{
+                        el.click();
+                        return txt.substring(0, 40);
+                    }}
+                }}
+                return null;
+            }}
+        """)
+        if eslesen:
+            log.info(f"Şehir seçildi (JS traversal): '{eslesen}' ({tip})")
             _bekle(0.5, 1)
             return
-        except Exception:
-            pass
 
-        # Fallback: ArrowDown + Enter
+        # Strateji 3: ArrowDown + Enter (kesin fallback)
         sayfa.keyboard.press("ArrowDown")
         _bekle(0.5, 0.8)
         sayfa.keyboard.press("Enter")
