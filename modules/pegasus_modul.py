@@ -618,35 +618,55 @@ def _sehir_sec(sayfa, iata: str, tip: str):
 
         _bekle(1.5, 2.5)
 
-        # ── Dropdown/autocomplete listesinden seç ────────────────────────────
-        dd_sels = [
-            ".ui-autocomplete li.ui-menu-item:first-child",
-            "ul.ui-autocomplete li:first-child",
-            "[class*='ui-autocomplete'] li:first-child",
-            "[class*='autocomplete-results'] li:first-child",
-            "[class*='autocomplete-dropdown'] li:first-child",
-            "[class*='suggestion-list'] li:first-child",
-            "[class*='suggestions'] li:first-child",
-            "[class*='dropdown-menu'] li:not(.disabled):first-child",
-            "[class*='search-results'] li:first-child",
-            "ul[role='listbox'] li:first-child",
-            "[role='option']:first-child",
+        # ── Dropdown/autocomplete popup açıldı mı kontrol et ─────────────────
+        # Önce herhangi bir visible li elementi ara (dropdown açık mı?)
+        POPUP_KONTEYNER = [
+            ".ui-autocomplete",
+            "[class*='ui-autocomplete']",
+            "[class*='autocomplete-results']",
+            "[class*='autocomplete-dropdown']",
+            "[class*='suggestion-list']",
+            "[class*='suggestions']",
+            "ul[role='listbox']",
         ]
         secildi = False
-        for dd in dd_sels:
+
+        for konteyner in POPUP_KONTEYNER:
             try:
-                sayfa.wait_for_selector(dd, timeout=2500, state="visible")
-                sayfa.click(dd)
-                secildi = True
-                log.info(f"Şehir dropdown seçildi ({tip}): {dd}")
-                break
+                sayfa.wait_for_selector(f"{konteyner} li", timeout=2500, state="visible")
+                # Konteyner açık — içinde arama metnine uyan li bul
+                eslesen = sayfa.evaluate(f"""
+                    () => {{
+                        const items = document.querySelectorAll('{konteyner} li');
+                        const ara = {repr(arama.lower())};
+                        for (const li of items) {{
+                            if (li.offsetParent !== null &&
+                                li.innerText.toLowerCase().includes(ara)) {{
+                                li.click();
+                                return li.innerText.trim();
+                            }}
+                        }}
+                        // Eşleşme bulunamadı, ilk görünür li'yi seç
+                        for (const li of items) {{
+                            if (li.offsetParent !== null) {{
+                                li.click();
+                                return 'first:' + li.innerText.trim();
+                            }}
+                        }}
+                        return null;
+                    }}
+                """)
+                if eslesen:
+                    secildi = True
+                    log.info(f"Şehir dropdown seçildi ({tip}): '{eslesen}' ({konteyner})")
+                    break
             except Exception:
                 continue
 
         if not secildi:
             # ArrowDown → Enter (evrensel fallback)
             sayfa.keyboard.press("ArrowDown")
-            _bekle(0.3, 0.5)
+            _bekle(0.4, 0.6)
             sayfa.keyboard.press("Enter")
             log.info(f"Şehir ArrowDown+Enter ile seçildi ({tip})")
 
@@ -970,22 +990,39 @@ def _ara_tikla(sayfa):
     LAB_DEPPORT input'unun bulunduğu formu bul ve o formu submit et.
     Araç kiralama gibi başka 'Ara' butonlarına BASMAMAK için form bazlı yaklaşım.
     """
-    # ── 1. LAB_DEPPORT'un bulunduğu formu JS ile submit et ───────────────────
+    # ── 1. LAB_DEPPORT'un bulunduğu formda input[type=submit] ara ────────────
+    # Dikkat: formun içindeki ilk button sekme (Gidiş-Dönüş/Tek Yön) olabilir,
+    # onları atla — sadece input[type=submit] veya value='Ara' olan butonu bul.
     try:
         ok = sayfa.evaluate("""
             () => {
-                // Uçuş form inputu LAB_DEPPORT'u bul
                 const inp = document.querySelector(
                     "input[name='LAB_DEPPORT'], input[id='LAB_DEPPORT']"
                 );
                 if (!inp) return null;
                 const frm = inp.closest('form');
                 if (!frm) return null;
-                // Form içindeki submit butonunu tıkla
-                const btn = frm.querySelector(
-                    'input[type=submit], button[type=submit], button, a[onclick]'
-                );
-                if (btn) { btn.click(); return 'form-btn:' + (btn.value||btn.innerText||'btn').trim(); }
+
+                // Önce input[type=submit] dene (en güvenli)
+                const sub = frm.querySelector('input[type=submit]');
+                if (sub && sub.offsetParent !== null) {
+                    sub.click();
+                    return 'input[type=submit]:' + (sub.value||'').trim();
+                }
+
+                // Değeri 'Ara' olan input/button
+                for (const el of frm.querySelectorAll('input, button, a')) {
+                    const v = (el.value || el.innerText || '').trim();
+                    const tabTexts = ['Gidiş','Dönüş','Tek Yön','Çoklu'];
+                    if (v === 'Ara' && !tabTexts.some(t => v.includes(t))) {
+                        if (el.offsetParent !== null) {
+                            el.click();
+                            return 'Ara-el:' + el.tagName + ':' + v;
+                        }
+                    }
+                }
+
+                // Son çare: form submit
                 frm.submit();
                 return 'form.submit';
             }
@@ -996,13 +1033,13 @@ def _ara_tikla(sayfa):
     except Exception as e:
         log.warning(f"Form submit hatası: {e}")
 
-    # ── 2. tstnm_ class'lı buton (Pegasus test name pattern) ─────────────────
-    for sel in ["[class*='tstnm_fly_search_search']","[class*='tstnm_search']",
-                "[class*='fly-search'] input[type='submit']",
-                "[class*='fly-search'] button",
-                "[class*='flight-search'] input[type='submit']",
-                "input[value='Ara']","input[value='ARA']","input[value='SEARCH']",
-                "button:has-text('Ara')"]:
+    # ── 2. Spesifik selector'lar ──────────────────────────────────────────────
+    for sel in [
+        "input[value='Ara']","input[value='ARA']","input[value='SEARCH']",
+        "[class*='tstnm_fly_search_search']","[class*='tstnm_search']",
+        "[class*='fly-search'] input[type='submit']",
+        "[class*='searchButton']","[class*='search-button']",
+    ]:
         try:
             el = sayfa.query_selector(sel)
             if el and el.is_visible():
