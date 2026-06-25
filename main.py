@@ -203,7 +203,7 @@ async def _sms_kodu_isle(update: Update, s: dict, metin: str):
     def _ara():
         return pegasus_ucus_sorgula(ana_sayfa, s["komut"])
 
-    ucuslar = await pw_async(_ara, timeout=90)
+    ucuslar = await pw_async(_ara, timeout=180)
     s["ucuslar"] = ucuslar
 
     if not ucuslar:

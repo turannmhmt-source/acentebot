@@ -320,7 +320,19 @@ def pegasus_ucus_sorgula(sayfa, komut: dict) -> list:
         log.info(f"Sorgu: {nereden}→{nereye} {tip}")
 
         sayfa.goto(PEGASUS_ANA_URL, wait_until="domcontentloaded", timeout=30000)
-        _bekle(2, 3)
+        _bekle(3, 4)
+        _ss(sayfa, "05_ana_ekran")
+
+        # Sayfadaki tüm visible input'ları logla (bir kez diagnostic)
+        try:
+            inputlar = sayfa.evaluate("""
+                () => Array.from(document.querySelectorAll('input:not([type=hidden]),select,textarea'))
+                    .filter(el => el.offsetParent !== null)
+                    .map(el => el.tagName+'|'+el.type+'|'+el.name+'|'+el.id+'|'+el.placeholder)
+            """)
+            log.info(f"Ana ekran inputları: {inputlar[:15]}")
+        except Exception:
+            pass
 
         # Uçuş tipi
         if tip == "tek_yon":
@@ -380,30 +392,73 @@ def pegasus_ucus_sorgula(sayfa, komut: dict) -> list:
 
 
 def _sehir_sec(sayfa, iata: str, tip: str):
-    try:
-        arama = SEHIR_ARAMA.get(iata, iata)
-        if tip == "nereden":
-            sel = "input[placeholder*='Nereden'], input[id*='from'], input[name*='from']"
-        else:
-            sel = "input[placeholder*='Nereye'], input[id*='to'], input[name*='to']"
+    arama = SEHIR_ARAMA.get(iata, iata)
+    # Sırayla denenecek selector'lar
+    if tip == "nereden":
+        adaylar = [
+            "input[name='ORIGIN']", "input[name='origin']",
+            "input[id*='origin']", "input[id*='Origin']",
+            "input[id*='from']", "input[id*='From']",
+            "input[placeholder*='Nereden']", "input[placeholder*='nereden']",
+            "input[placeholder*='Kalkış']",
+        ]
+    else:
+        adaylar = [
+            "input[name='DESTINATION']", "input[name='destination']",
+            "input[id*='destination']", "input[id*='Destination']",
+            "input[id*='to']", "input[id*='To']",
+            "input[placeholder*='Nereye']", "input[placeholder*='nereye']",
+            "input[placeholder*='Varış']",
+        ]
 
-        sayfa.wait_for_selector(sel, timeout=10000)
-        sayfa.fill(sel, "")
-        sayfa.type(sel, arama, delay=100)
+    girdi = None
+    for sel in adaylar:
+        try:
+            el = sayfa.query_selector(sel)
+            if el and el.is_visible():
+                girdi = el
+                log.info(f"Şehir alanı bulundu ({tip}): {sel}")
+                break
+        except Exception:
+            continue
+
+    if not girdi:
+        log.warning(f"Şehir alanı bulunamadı ({tip}-{iata}), atlıyorum")
+        return
+
+    try:
+        girdi.click()
+        _bekle(0.3, 0.5)
+        girdi.fill("")
+        girdi.type(arama, delay=100)
         _bekle(1, 2)
 
-        try:
-            dd = "[class*='suggestion'] li:first-child, [class*='autocomplete'] li:first-child, ul[class*='auto'] li:first-child"
-            sayfa.wait_for_selector(dd, timeout=5000)
-            sayfa.click(dd)
-        except Exception:
+        # Dropdown bekle ve seç
+        dd_sels = [
+            "[class*='suggestion'] li:first-child",
+            "[class*='autocomplete'] li:first-child",
+            "ul[class*='auto'] li:first-child",
+            "[class*='dropdown'] li:first-child",
+            "li[class*='result']:first-child",
+        ]
+        secildi = False
+        for dd in dd_sels:
+            try:
+                sayfa.wait_for_selector(dd, timeout=3000)
+                sayfa.click(dd)
+                secildi = True
+                break
+            except Exception:
+                continue
+
+        if not secildi:
             sayfa.keyboard.press("ArrowDown")
             _bekle(0.3, 0.5)
             sayfa.keyboard.press("Enter")
 
-        log.info(f"Şehir: {arama} ({tip})")
+        log.info(f"Şehir seçildi: {arama} ({tip})")
     except Exception as e:
-        log.warning(f"Şehir hatası ({tip}-{iata}): {e}")
+        log.warning(f"Şehir seçim hatası ({tip}-{iata}): {e}")
 
 
 def _tarih_sec(sayfa, tarih: str, tip: str):
