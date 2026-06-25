@@ -591,85 +591,58 @@ def _sehir_input_bul(sayfa, tip: str):
 
 def _sehir_sec(sayfa, iata: str, tip: str):
     """
-    Şehir seçimi. React SelectBox — gerçek Playwright/keyboard event şart.
-    Strateji: yaz → dropdown açıldı mı kontrol et → ArrowDown+Enter (birincil)
-              → dropdown li tıkla (ikincil) → doğrula.
+    Şehir seçimi.
+    Gizli field'lar (logdan tespit edildi): DEPPORT / ARRPORT
+    Görünür field'lar: LAB_DEPPORT / LAB_ARRPORT
+    Strateji: ArrowDown+Enter (React event) + JS hidden field set (garanti).
     """
     arama = SEHIR_ARAMA.get(iata, iata)
     inp_sel = "input[name='LAB_DEPPORT']" if tip == "nereden" else "input[name='LAB_ARRPORT']"
-    log.info(f"Şehir seçimi başlıyor: {iata}→'{arama}' ({tip}), inp={inp_sel}")
+    hidden_name = "DEPPORT" if tip == "nereden" else "ARRPORT"
+    log.info(f"Şehir seçimi: {iata}→'{arama}' ({tip})")
 
     try:
-        # 1. Input'u tıkla ve odakla
+        # 1. Input'u tıkla, temizle, şehir adını yaz
         sayfa.click(inp_sel, timeout=8000)
-        _bekle(0.4, 0.6)
-
-        # 2. Mevcut değeri tamamen temizle
+        _bekle(0.3, 0.5)
         sayfa.keyboard.press("Control+a")
-        _bekle(0.1, 0.2)
         sayfa.keyboard.press("Delete")
         _bekle(0.1, 0.2)
-        sayfa.keyboard.press("Control+a")
-        sayfa.keyboard.press("BackSpace")
-        _bekle(0.2, 0.3)
-
-        # 3. Şehir adını yaz (IATA ile de dropdown açılıyor ama tam ad daha güvenli)
         sayfa.type(inp_sel, arama, delay=80)
         log.info(f"Şehir adı yazıldı: '{arama}'")
-        _bekle(2.5, 3.5)   # dropdown açılmasını bekle
+        _bekle(2.5, 3.5)
 
-        # 4. ArrowDown + Enter — klavye navigasyonu, React synthetic event tetikler
-        #    Dropdown açıkken ArrowDown ilk öğeye gider, Enter seçer.
+        # 2. ArrowDown + Enter — dropdown'daki ilk öğeyi seç (React event tetikler)
         sayfa.keyboard.press("ArrowDown")
         _bekle(0.5, 0.8)
         sayfa.keyboard.press("Enter")
         _bekle(0.8, 1.2)
-        log.info(f"Şehir klavye ile seçildi (ArrowDown+Enter): {arama} ({tip})")
+        log.info(f"ArrowDown+Enter gönderildi ({tip})")
 
-        # 5. Doğrula — input değeri dolduysa OK
+        # 3. Input değerini logla
         try:
             deger = sayfa.input_value(inp_sel)
-            log.info(f"Şehir input değeri ({tip}): '{deger}'")
-            if deger and len(deger) >= 2:
-                return  # başarılı
+            log.info(f"LAB input değeri ({tip}): '{deger}'")
         except Exception:
             pass
 
-        # 6. Fallback: dropdown li elementine gerçek Playwright tıklaması
-        log.warning(f"ArrowDown+Enter sonrası input boş — dropdown li deniyor ({tip})")
-        sayfa.click(inp_sel, timeout=5000)
-        _bekle(0.3, 0.5)
-        sayfa.type(inp_sel, arama, delay=80)
-        _bekle(2.0, 3.0)
-
-        dropdown_sels = [
-            "li[class*='SelectBox']",
-            "li[class*='selectbox']",
-            "[class*='SelectBox__option']",
-            "[class*='selectBox__option']",
-            "[class*='select__option']",
-            "[role='option']",
-            "[role='listbox'] [role='option']",
-            "ul[class*='list'] li",
-            "ul[class*='List'] li",
-            ".dropdown-menu li",
-        ]
-        for dsel in dropdown_sels:
-            try:
-                ilk = sayfa.locator(dsel).first
-                if ilk.is_visible(timeout=800):
-                    ilk.click(timeout=2000)
-                    _bekle(0.5, 1)
-                    deger2 = sayfa.input_value(inp_sel)
-                    log.info(f"Şehir seçildi (dropdown li '{dsel}'): '{deger2}' ({tip})")
-                    return
-            except Exception:
-                continue
-
-        log.error(f"Şehir seçimi BAŞARISIZ ({tip}-{iata}): tüm stratejiler denendi")
-
     except Exception as e:
-        log.error(f"Şehir seçim hatası ({tip}-{iata}): {e}")
+        log.warning(f"Şehir klavye hatası ({tip}-{iata}): {e}")
+
+    # 4. Her koşulda hidden DEPPORT/ARRPORT'u IATA koduyla set et
+    #    form.submit() bunları kullanır — React state'den bağımsız çalışır.
+    try:
+        sayfa.evaluate(f"""
+            () => {{
+                const h = document.querySelector("input[name='{hidden_name}']");
+                if (h) {{ h.value = '{iata}'; }}
+                const t = document.querySelector("input[name='{inp_sel[7:-1]}']");
+                if (t && !t.value) {{ t.value = '{arama}'; }}
+            }}
+        """)
+        log.info(f"Hidden {hidden_name}='{iata}' JS ile set edildi ({tip}) ✅")
+    except Exception as ex:
+        log.warning(f"Hidden field set hatası ({tip}): {ex}")
 
 
 def _tarih_sec(sayfa, tarih: str, tip: str):
