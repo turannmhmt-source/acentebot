@@ -570,118 +570,72 @@ def _sehir_input_bul(sayfa, tip: str):
 
 
 def _sehir_sec(sayfa, iata: str, tip: str):
+    """
+    Dropdown yapısı (screenshottan): iki panel — sol şehir listesi, sağ ülke.
+    Her şehir item'ı: bold şehir adı + altında 'Türkiye' yazısı.
+    """
     arama = SEHIR_ARAMA.get(iata, iata)
-    girdi = _sehir_input_bul(sayfa, tip)
+    inp_sel = "input[name='LAB_DEPPORT']" if tip == "nereden" else "input[name='LAB_ARRPORT']"
 
+    girdi = _sehir_input_bul(sayfa, tip)
     if not girdi:
-        log.warning(f"Şehir alanı bulunamadı ({tip}-{iata}), atlıyorum")
+        log.warning(f"Şehir input bulunamadı ({tip}-{iata})")
         return
 
     try:
-        # ── Tıkla ve temizle ─────────────────────────────────────────────────
-        # Selector string: click_count için gerekli
-        sel_str = "input[name='LAB_DEPPORT']" if tip == "nereden" else "input[name='LAB_ARRPORT']"
-
+        # 1. Tıkla, mevcut değeri sil, arama metnini yaz
         girdi.click()
         _bekle(0.3, 0.5)
-        # ElementHandle.triple_click yok — click_count kullan
-        try:
-            sayfa.click(sel_str, click_count=3)
-        except Exception:
-            girdi.click()
+        sayfa.keyboard.press("Control+a")
+        sayfa.keyboard.press("Delete")
         _bekle(0.1, 0.2)
 
-        # ── Yaz — React/custom input için native value setter + events ─────────
-        girdi.click()
-        _bekle(0.2, 0.3)
-        girdi.fill("")
+        for c in arama:
+            girdi.press(c)
+            time.sleep(0.08)
 
-        # React synthetic event ile yaz (custom SelectBox için gerekli)
-        try:
-            sayfa.evaluate(f"""
-                () => {{
-                    const sel = "input[name='LAB_DEPPORT'], input[id='LAB_DEPPORT'], input[name='LAB_ARRPORT'], input[id='LAB_ARRPORT']";
-                    const inputs = document.querySelectorAll(sel);
-                    const inp = document.activeElement && document.activeElement.name &&
-                        (document.activeElement.name === 'LAB_DEPPORT' || document.activeElement.name === 'LAB_ARRPORT')
-                        ? document.activeElement
-                        : Array.from(inputs).find(el => el.offsetParent !== null);
-                    if (!inp) return;
-                    const nativeSetter = Object.getOwnPropertyDescriptor(
-                        window.HTMLInputElement.prototype, 'value').set;
-                    nativeSetter.call(inp, {repr(arama)});
-                    inp.dispatchEvent(new Event('input', {{bubbles:true}}));
-                    inp.dispatchEvent(new Event('change', {{bubbles:true}}));
-                    inp.dispatchEvent(new KeyboardEvent('keyup', {{bubbles:true, key:'a'}}));
+        _bekle(2, 3)  # dropdown açılmasını bekle
+
+        # 2. Dropdown içindeki şehir item'ını JS ile bul ve tıkla
+        #    Screenshottan: dropdown, input'a yakın bir panelde açılıyor.
+        #    Şehir adları bold metin olarak görünüyor.
+        secildi = sayfa.evaluate(f"""
+            () => {{
+                const ara = {repr(arama.lower())};
+                const aktif = document.activeElement;
+
+                // Tüm visible elemanları tara
+                // Önce kısa metin (leaf-like) olanları dene — şehir adı
+                const tum = Array.from(document.querySelectorAll('*'));
+
+                // 1. Deneme: innerText tam olarak şehir adını içeriyor, çok az child var
+                for (const el of tum) {{
+                    if (!el.offsetParent || el === aktif) continue;
+                    if (['INPUT','TEXTAREA','SCRIPT','STYLE','BODY','HTML'].includes(el.tagName)) continue;
+                    const txt = (el.innerText || '').trim().toLowerCase();
+                    if (!txt.includes(ara)) continue;
+                    // 3 satırdan az metin (şehir adı + ülke = 2 satır)
+                    if (txt.split('\\n').length > 4) continue;
+                    el.click();
+                    return el.innerText.trim().substring(0,50);
                 }}
-            """)
-        except Exception:
-            pass
+                return null;
+            }}
+        """)
 
-        # Ek olarak karakter karakter de yaz (fallback)
-        try:
-            for c in arama:
-                girdi.press(c)
-                time.sleep(0.06)
-        except Exception:
-            pass
-
-        _bekle(2, 3)
-        _ss(sayfa, f"sehir_yazildi_{tip}")
-
-        # ── Dropdown açıldıktan sonra ne göründüğünü logla ───────────────────
-        try:
-            gorunen = sayfa.evaluate("""
-                () => Array.from(document.querySelectorAll('li, [class*="option"], [class*="item"], [role="option"]'))
-                    .filter(el => el.offsetParent !== null && el.innerText.trim().length > 0)
-                    .slice(0, 10)
-                    .map(el => el.tagName + '|' + (el.className||'').substring(0,50) + '|' + el.innerText.trim().substring(0,30))
-            """)
-            log.info(f"Dropdown elemanları ({tip}): {gorunen}")
-        except Exception:
-            pass
-
-        # ── BRUTE FORCE: Sayfadaki tüm visible leaf node'ları tara ───────────
-        # Dropdown hangi class'la gelirse gelsin, arama metnini içeren ilk
-        # tıklanabilir elementi bul.
-        secildi = False
-        try:
-            eslesen = sayfa.evaluate(f"""
-                () => {{
-                    const ara = {repr(arama.lower())};
-                    // Aktif input'u ve onun genel alanını bul
-                    const aktif = document.activeElement;
-
-                    // Tüm visible elemanları tara — leaf node veya az çocuklu
-                    const adaylar = Array.from(document.querySelectorAll('*'))
-                        .filter(el => {{
-                            if (!el.offsetParent) return false;
-                            if (el === aktif) return false;
-                            if (['SCRIPT','STYLE','HEAD','BODY','HTML'].includes(el.tagName)) return false;
-                            const txt = (el.innerText || '').trim();
-                            if (!txt.toLowerCase().includes(ara)) return false;
-                            // Leaf node veya çok az çocuk
-                            const visKids = Array.from(el.children).filter(c => c.offsetParent);
-                            return visKids.length <= 2;
-                        }});
-
-                    if (adaylar.length === 0) return null;
-                    adaylar[0].click();
-                    return adaylar[0].innerText.trim().substring(0, 40);
-                }}
-            """)
-            if eslesen:
-                secildi = True
-                log.info(f"Şehir brute-force seçildi ({tip}): '{eslesen}'")
-        except Exception as be:
-            log.warning(f"Brute-force hatası ({tip}): {be}")
-
-        if not secildi:
-            # Son çare: ArrowDown + Enter
+        if secildi:
+            log.info(f"Şehir seçildi ({tip}): '{secildi}'")
+        else:
+            # Fallback: ArrowDown + Enter
             sayfa.keyboard.press("ArrowDown")
             _bekle(0.4, 0.6)
             sayfa.keyboard.press("Enter")
             log.info(f"Şehir ArrowDown+Enter ({tip})")
+
+        _bekle(0.5, 1)
+
+    except Exception as e:
+        log.warning(f"Şehir seçim hatası ({tip}-{iata}): {e}")
 
         _bekle(0.5, 1)
         log.info(f"Şehir seçildi: {arama} ({iata}-{tip})")
@@ -769,30 +723,42 @@ def _tarih_sec(sayfa, tarih: str, tip: str):
             log.warning(f"Tarih alanı bulunamadı ({tip}), atlıyorum")
             return
 
-        # ── Direkt değer yaz (masked input desteği) ──────────────────────────
+        # ── 1. Önce tıklayıp takvim açılıyor mu dene ─────────────────────────
+        tarih_inp_sel = "input[name='FLTDATE']" if tip == "gidis" else "input[name='RETURNDATE']"
+        girdi.click()
+        _bekle(1, 1.5)
+
+        # Takvim açıldıysa oradan seç
+        takvim_var = False
+        for tk_sel in [".ui-datepicker", "[class*='datepicker']", "[class*='calendar']",
+                       "[class*='DatePicker']", "[class*='Calendar']"]:
+            try:
+                el = sayfa.query_selector(tk_sel)
+                if el and el.is_visible():
+                    takvim_var = True
+                    break
+            except Exception:
+                pass
+
+        if takvim_var:
+            _takvim_sec(sayfa, gun, ay, yil)
+            log.info(f"Tarih takvimden seçildi ({tip}): {gun}.{ay}.{yil}")
+            return
+
+        # ── 2. Takvim yoksa direkt yaz ────────────────────────────────────────
         try:
-            girdi.click()
-            _bekle(0.3, 0.5)
-            # Masked input için triple_click + type
-            girdi.triple_click()
-            girdi.type(tarih_str, delay=60)
+            sayfa.keyboard.press("Control+a")
+            sayfa.keyboard.press("Delete")
+            _bekle(0.1, 0.2)
+            for c in tarih_str:
+                girdi.press(c)
+                time.sleep(0.05)
             sayfa.keyboard.press("Tab")
             _bekle(0.5, 1)
-            # Değer settiyse takvim açılmadı demektir — kontrol et
             deger = girdi.input_value()
-            if tarih_str in deger or str(gun) in deger:
-                log.info(f"Tarih direkt yazıldı ({tip}): {tarih_str}")
-                return
-        except Exception:
-            pass
-
-        # ── Takvim popup ile seç ─────────────────────────────────────────────
-        try:
-            girdi.click()
-            _bekle(1, 1.5)
-        except Exception:
-            pass
-        _takvim_sec(sayfa, gun, ay, yil)
+            log.info(f"Tarih yazıldı ({tip}): '{deger}'")
+        except Exception as te:
+            log.warning(f"Tarih yazma hatası: {te}")
 
     except Exception as e:
         log.warning(f"Tarih hatası ({tip}): {e}")
