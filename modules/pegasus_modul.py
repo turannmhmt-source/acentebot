@@ -440,12 +440,20 @@ def _tab_sec(sayfa, metin: str):
 def _sehir_input_bul(sayfa, tip: str):
     """
     Nereden/Nereye input elementini bul.
-    Strateji sırası:
-    1. JS ile label metni "Nereden"/"Nereye"ye yakın input
-    2. Bilinen name/id/placeholder selector listesi
-    3. Sayfadaki görünür text input'ların sıra indeksi
-    Bulduğu elementi döner, bulamazsa None.
+    Kesin bilinen: LAB_DEPPORT (nereden), LAB_ARRPORT (nereye)
     """
+    # ── Strateji 0: Kesin bilinen selector'lar (logdan öğrenildi) ────────────
+    kesin = ["input[name='LAB_DEPPORT']","input[id='LAB_DEPPORT']"] if tip == "nereden" \
+        else ["input[name='LAB_ARRPORT']","input[id='LAB_ARRPORT']"]
+    for sel in kesin:
+        try:
+            el = sayfa.query_selector(sel)
+            if el:
+                log.info(f"Şehir input ({tip}) kesin: {sel}")
+                return el
+        except Exception:
+            continue
+
     label_metin = "Nereden" if tip == "nereden" else "Nereye"
 
     # ── Strateji 1: JS label proximity ───────────────────────────────────────
@@ -571,15 +579,24 @@ def _sehir_sec(sayfa, iata: str, tip: str):
 
     try:
         # ── Tıkla ve temizle ─────────────────────────────────────────────────
+        # Selector string: click_count için gerekli
+        sel_str = "input[name='LAB_DEPPORT']" if tip == "nereden" else "input[name='LAB_ARRPORT']"
+
         girdi.click()
         _bekle(0.3, 0.5)
-        girdi.triple_click()
+        # ElementHandle.triple_click yok — click_count kullan
+        try:
+            sayfa.click(sel_str, click_count=3)
+        except Exception:
+            girdi.click()
         _bekle(0.1, 0.2)
 
         # ── Yaz (jQuery autocomplete'i hem native hem jQuery event tetikler) ──
-        # Önce native fill, sonra karakter karakter type
         girdi.fill("")
-        girdi.type(arama, delay=80)
+        # press ile karakter karakter yaz (autocomplete tetikler)
+        for c in arama:
+            girdi.press(c)
+            time.sleep(0.07)
 
         # jQuery autocomplete tetikle (varsa)
         try:
@@ -587,14 +604,13 @@ def _sehir_sec(sayfa, iata: str, tip: str):
                 () => {{
                     const el = document.activeElement;
                     if (!el) return;
-                    // jQuery UI autocomplete search
-                    if (window.$ && $(el).data('ui-autocomplete')) {{
-                        $(el).autocomplete('search', {repr(arama)});
+                    const inp = document.activeElement;
+                    if (!inp) return;
+                    if (window.$ && $(inp).data('ui-autocomplete')) {{
+                        $(inp).autocomplete('search', {repr(arama)});
                     }}
-                    // keyup / input event tetikle
-                    ['input','keyup','keydown'].forEach(ev => {{
-                        el.dispatchEvent(new Event(ev, {{bubbles:true}}));
-                    }});
+                    ['input','keyup','keydown'].forEach(ev =>
+                        inp.dispatchEvent(new Event(ev, {{bubbles:true}})));
                 }}
             """)
         except Exception:
@@ -655,6 +671,7 @@ def _tarih_sec(sayfa, tarih: str, tip: str):
         # ── Tarih input'unu bul ───────────────────────────────────────────────
         if tip == "gidis":
             adaylar = [
+                "input[name='FLTDATE']","input[id='FLTDATE']",  # Pegasus kesin
                 "input[name='DEPARTURE_DATE']","input[name='departureDate']",
                 "input[name='DEPART_DATE']","input[name='departDate']",
                 "input[name='DEPART']","input[name='depart']",
