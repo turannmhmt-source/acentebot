@@ -117,7 +117,7 @@ def pegasus_giris_baslat(tarayici) -> tuple:
 
         _ss(sayfa, "02_enter_sonrasi")
 
-        # OTP alanı görünmezse buton yöntemini dene
+        # OTP alanı görünene kadar bekle
         try:
             sayfa.wait_for_selector("input[name='OTP_INPUT']", state="visible", timeout=10000)
             log.info("OTP ekranı açıldı ✅")
@@ -128,52 +128,18 @@ def pegasus_giris_baslat(tarayici) -> tuple:
             sayfa.wait_for_selector("input[name='OTP_INPUT']", state="visible", timeout=15000)
             log.info("OTP ekranı açıldı ✅")
 
-        # SMS Gönder — diagnostic + tıklama
+        # SMS Gönder — Playwright get_by_text (element tipi fark etmez)
         try:
-            # Hangi elementler "SMS" içeriyor, logla
-            bilgi = sayfa.evaluate("""
-                () => {
-                    const sonuclar = [];
-                    document.querySelectorAll('*').forEach(el => {
-                        const kendi = (el.childElementCount === 0)
-                            ? (el.innerText || el.textContent || el.value || '').trim()
-                            : '';
-                        if (kendi.includes('SMS') && kendi.length < 40) {
-                            sonuclar.push(el.tagName + '|' + el.className + '|' + kendi);
-                        }
-                    });
-                    return sonuclar;
-                }
-            """)
-            log.info(f"SMS elementi adayları: {bilgi}")
-        except Exception as e:
-            log.warning(f"SMS diagnostic: {e}")
-
-        # Frame'lerde de ara
-        try:
-            for frame in sayfa.frames:
-                try:
-                    tiklandi = frame.evaluate("""
-                        () => {
-                            const all = Array.from(document.querySelectorAll('*'));
-                            for (const el of all) {
-                                const t = (el.innerText || el.textContent || el.value || '').trim();
-                                if (t === 'SMS Gönder' || (t.includes('SMS') && t.includes('nder') && t.length < 20)) {
-                                    el.dispatchEvent(new MouseEvent('click', {bubbles: true}));
-                                    return t;
-                                }
-                            }
-                            return null;
-                        }
-                    """)
-                    if tiklandi:
-                        log.info(f"SMS Gönder frame'de tıklandı ✅: '{tiklandi}'")
-                        _bekle(3, 4)
-                        break
-                except Exception:
-                    continue
-        except Exception as e:
-            log.warning(f"Frame SMS: {e}")
+            sayfa.get_by_text("SMS Gönder", exact=True).click(timeout=5000)
+            log.info("SMS Gönder tıklandı ✅")
+            _bekle(3, 4)
+        except Exception:
+            try:
+                sayfa.locator("text=SMS Gönder").first.click(timeout=5000)
+                log.info("SMS Gönder tıklandı ✅ (locator)")
+                _bekle(3, 4)
+            except Exception as e:
+                log.warning(f"SMS Gönder tıklanamadı: {e}")
 
         _ss(sayfa, "03_sms_gonderildi")
         log.info("SMS gönderildi — OTP bekleniyor")
@@ -275,27 +241,18 @@ def pegasus_otp_gir(konteks, sayfa, otp_kodu: str):
         sayfa.fill("input[name='OTP_INPUT']", kod)
         _bekle(0.5, 1.0)
 
-        # Giriş yap — önce JS, yoksa Enter
+        # Giriş yap — get_by_text → locator → Enter
         with konteks.expect_page(timeout=30000) as yeni_bilgi:
-            tiklandi = sayfa.evaluate("""
-                () => {
-                    const elems = Array.from(document.querySelectorAll(
-                        'button, input[type=submit], input[type=button], a'
-                    ));
-                    for (const el of elems) {
-                        const t = (el.textContent || el.value || '').trim();
-                        if (t.includes('Giri') || t.toLowerCase().includes('login')) {
-                            el.click(); return true;
-                        }
-                    }
-                    return false;
-                }
-            """)
-            if tiklandi:
-                log.info("Giriş yap tıklandı ✅ (JS)")
-            else:
-                sayfa.press("input[name='OTP_INPUT']", "Enter")
-                log.info("Giriş yap — Enter ile ✅")
+            try:
+                sayfa.get_by_text("Giriş yap", exact=True).click(timeout=5000)
+                log.info("Giriş yap tıklandı ✅")
+            except Exception:
+                try:
+                    sayfa.locator("text=Giriş yap").first.click(timeout=5000)
+                    log.info("Giriş yap tıklandı ✅ (locator)")
+                except Exception:
+                    sayfa.press("input[name='OTP_INPUT']", "Enter")
+                    log.info("Giriş yap — Enter ✅")
 
         yeni_sayfa = yeni_bilgi.value
         yeni_sayfa.wait_for_load_state("domcontentloaded", timeout=30000)
