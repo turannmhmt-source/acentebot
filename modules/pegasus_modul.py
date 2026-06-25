@@ -570,66 +570,67 @@ def _sehir_input_bul(sayfa, tip: str):
 
 
 def _sehir_sec(sayfa, iata: str, tip: str):
+    """
+    Şehir seçimi. React SelectBox için sadece gerçek Playwright/keyboard
+    event kullan — JS el.click() React synthetic event tetiklemez.
+    Strateji: yaz → dropdown li tıkla → ArrowDown+Enter → kontrol.
+    """
     arama = SEHIR_ARAMA.get(iata, iata)
     inp_sel = "input[name='LAB_DEPPORT']" if tip == "nereden" else "input[name='LAB_ARRPORT']"
 
     try:
-        # Tıkla, temizle, yaz
-        sayfa.click(inp_sel)
+        # 1. Input'u tıkla, temizle, yaz
+        sayfa.click(inp_sel, timeout=5000)
         _bekle(0.3, 0.5)
         sayfa.keyboard.press("Control+a")
         sayfa.keyboard.press("Delete")
         _bekle(0.1, 0.2)
-        sayfa.type(inp_sel, arama, delay=80)
-        _bekle(2.5, 3.5)
+        # IATA kodunun ilk 3 harfini yaz — dropdown daha geniş arama yapar
+        arama_kisa = iata  # örn: "GZT", "SAW" — dropdown IATA'ya göre de filtreler
+        sayfa.type(inp_sel, arama_kisa, delay=100)
+        _bekle(2.0, 3.0)
 
-        # Strateji 1: Playwright locator — gerçek mouse tıklaması
-        for deneme_metin in [arama, arama.split()[0]]:  # tam metin sonra ilk kelime
+        # 2. Dropdown'daki ilk li/option'a gerçek Playwright tıklaması
+        # (React synthetic event tetikler, JS el.click() DEĞİL)
+        dropdown_sels = [
+            "[class*='SelectBox'] li:visible",
+            "[class*='selectbox'] li:visible",
+            "[class*='select-box'] li:visible",
+            "[class*='dropdown'] li:visible",
+            "[class*='Dropdown'] li:visible",
+            "[class*='option']:visible",
+            "[class*='Option']:visible",
+            "ul li:visible",
+        ]
+        secildi = False
+        for dsel in dropdown_sels:
             try:
-                loc = sayfa.locator(f"text={deneme_metin}").first
-                loc.click(timeout=3000)
-                log.info(f"Şehir seçildi (locator '{deneme_metin}'): {iata} ({tip})")
-                _bekle(0.5, 1)
-                return
+                ilk = sayfa.locator(dsel).first
+                if ilk.is_visible(timeout=1000):
+                    ilk.click(timeout=2000)
+                    _bekle(0.5, 1)
+                    log.info(f"Şehir seçildi (dropdown li): {arama_kisa} ({tip})")
+                    secildi = True
+                    break
             except Exception:
                 continue
 
-        # Strateji 2: Seçenek listesini JS ile tara — metin içeren ilk elemanı tıkla
-        eslesen = sayfa.evaluate(f"""
-            () => {{
-                const ara = {repr(arama.lower().split()[0])};  // İlk kelime yeterli
-                const aktif = document.activeElement;
-                for (const el of document.querySelectorAll('*')) {{
-                    if (!el.offsetParent || el === aktif) continue;
-                    if (['INPUT','SELECT','TEXTAREA','SCRIPT','STYLE','BODY','HTML','HEAD'].includes(el.tagName)) continue;
-                    const txt = (el.innerText||'').trim();
-                    const lines = txt.split('\\n').filter(l => l.trim());
-                    if (lines.length < 1 || lines.length > 3) continue;
-                    if (txt.toLowerCase().includes(ara)) {{
-                        el.click();
-                        return txt.substring(0, 40);
-                    }}
-                }}
-                return null;
-            }}
-        """)
-        if eslesen:
-            log.info(f"Şehir seçildi (JS traversal): '{eslesen}' ({tip})")
+        if not secildi:
+            # 3. ArrowDown + Enter — klavye ile React dropdown navigasyonu
+            sayfa.keyboard.press("ArrowDown")
+            _bekle(0.6, 1.0)
+            sayfa.keyboard.press("Enter")
             _bekle(0.5, 1)
-            return
+            log.info(f"Şehir seçildi (ArrowDown+Enter): {arama_kisa} ({tip})")
 
-        # Strateji 3: ArrowDown + Enter (kesin fallback)
-        sayfa.keyboard.press("ArrowDown")
-        _bekle(0.5, 0.8)
-        sayfa.keyboard.press("Enter")
-        log.info(f"Şehir seçildi (ArrowDown+Enter): {arama} ({tip})")
-        _bekle(0.5, 1)
-
-    except Exception as e:
-        log.warning(f"Şehir seçim hatası ({tip}-{iata}): {e}")
-
-        _bekle(0.5, 1)
-        log.info(f"Şehir seçildi: {arama} ({iata}-{tip})")
+        # 4. Seçim sonrası input değerini doğrula
+        try:
+            deger = sayfa.input_value(inp_sel)
+            log.info(f"Şehir input değeri ({tip}): '{deger}'")
+            if not deger or len(deger) < 2:
+                log.warning(f"Şehir seçimi doğrulanamadı ({tip}): input boş")
+        except Exception:
+            pass
 
     except Exception as e:
         log.warning(f"Şehir seçim hatası ({tip}-{iata}): {e}")
