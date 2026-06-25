@@ -591,12 +591,40 @@ def _sehir_sec(sayfa, iata: str, tip: str):
             girdi.click()
         _bekle(0.1, 0.2)
 
-        # ── Yaz (jQuery autocomplete'i hem native hem jQuery event tetikler) ──
+        # ── Yaz — React/custom input için native value setter + events ─────────
+        girdi.click()
+        _bekle(0.2, 0.3)
         girdi.fill("")
-        # press ile karakter karakter yaz (autocomplete tetikler)
-        for c in arama:
-            girdi.press(c)
-            time.sleep(0.07)
+
+        # React synthetic event ile yaz (custom SelectBox için gerekli)
+        try:
+            sayfa.evaluate(f"""
+                () => {{
+                    const sel = "input[name='LAB_DEPPORT'], input[id='LAB_DEPPORT'], input[name='LAB_ARRPORT'], input[id='LAB_ARRPORT']";
+                    const inputs = document.querySelectorAll(sel);
+                    const inp = document.activeElement && document.activeElement.name &&
+                        (document.activeElement.name === 'LAB_DEPPORT' || document.activeElement.name === 'LAB_ARRPORT')
+                        ? document.activeElement
+                        : Array.from(inputs).find(el => el.offsetParent !== null);
+                    if (!inp) return;
+                    const nativeSetter = Object.getOwnPropertyDescriptor(
+                        window.HTMLInputElement.prototype, 'value').set;
+                    nativeSetter.call(inp, {repr(arama)});
+                    inp.dispatchEvent(new Event('input', {{bubbles:true}}));
+                    inp.dispatchEvent(new Event('change', {{bubbles:true}}));
+                    inp.dispatchEvent(new KeyboardEvent('keyup', {{bubbles:true, key:'a'}}));
+                }}
+            """)
+        except Exception:
+            pass
+
+        # Ek olarak karakter karakter de yaz (fallback)
+        try:
+            for c in arama:
+                girdi.press(c)
+                time.sleep(0.06)
+        except Exception:
+            pass
 
         _bekle(2, 3)
         _ss(sayfa, f"sehir_yazildi_{tip}")
@@ -607,70 +635,53 @@ def _sehir_sec(sayfa, iata: str, tip: str):
                 () => Array.from(document.querySelectorAll('li, [class*="option"], [class*="item"], [role="option"]'))
                     .filter(el => el.offsetParent !== null && el.innerText.trim().length > 0)
                     .slice(0, 10)
-                    .map(el => el.tagName + '|' + (el.className||'').substring(0,40) + '|' + el.innerText.trim().substring(0,30))
+                    .map(el => el.tagName + '|' + (el.className||'').substring(0,50) + '|' + el.innerText.trim().substring(0,30))
             """)
-            log.info(f"Dropdown sonrası visible elemanlar ({tip}): {gorunen}")
+            log.info(f"Dropdown elemanları ({tip}): {gorunen}")
         except Exception:
             pass
 
-        # ── SelectBox dropdown seç (Pegasus custom component) ─────────────────
-        POPUP_KONTEYNER = [
-            "[class*='SelectBox__dropdown']",
-            "[class*='SelectBox__list']",
-            "[class*='SelectBox__options']",
-            "[class*='SelectBox__menu']",
-            "[class*='SelectBox__popup']",
-            "[class*='selectbox-dropdown']",
-            "[class*='selectbox-list']",
-            ".ui-autocomplete",
-            "[class*='ui-autocomplete']",
-            "[class*='autocomplete']",
-            "[class*='suggestion']",
-            "ul[role='listbox']",
-            "[role='listbox']",
-        ]
+        # ── BRUTE FORCE: Sayfadaki tüm visible leaf node'ları tara ───────────
+        # Dropdown hangi class'la gelirse gelsin, arama metnini içeren ilk
+        # tıklanabilir elementi bul.
         secildi = False
+        try:
+            eslesen = sayfa.evaluate(f"""
+                () => {{
+                    const ara = {repr(arama.lower())};
+                    // Aktif input'u ve onun genel alanını bul
+                    const aktif = document.activeElement;
 
-        for konteyner in POPUP_KONTEYNER:
-            try:
-                sayfa.wait_for_selector(f"{konteyner}", timeout=1500, state="visible")
-                # Konteyner açık — içinde arama metnine uyan item bul
-                eslesen = sayfa.evaluate(f"""
-                    () => {{
-                        const cont = document.querySelector('{konteyner}');
-                        if (!cont) return null;
-                        const items = cont.querySelectorAll('li, div, span, a, [role="option"]');
-                        const ara = {repr(arama.lower())};
-                        for (const el of items) {{
-                            if (el.offsetParent !== null &&
-                                el.innerText && el.innerText.toLowerCase().includes(ara)) {{
-                                el.click();
-                                return el.innerText.trim();
-                            }}
-                        }}
-                        // Eşleşme bulunamadı — ilk görünür item
-                        for (const el of items) {{
-                            if (el.offsetParent !== null && el.innerText.trim()) {{
-                                el.click();
-                                return 'first:' + el.innerText.trim();
-                            }}
-                        }}
-                        return null;
-                    }}
-                """)
-                if eslesen:
-                    secildi = True
-                    log.info(f"Şehir dropdown seçildi ({tip}): '{eslesen}' ({konteyner})")
-                    break
-            except Exception:
-                continue
+                    // Tüm visible elemanları tara — leaf node veya az çocuklu
+                    const adaylar = Array.from(document.querySelectorAll('*'))
+                        .filter(el => {{
+                            if (!el.offsetParent) return false;
+                            if (el === aktif) return false;
+                            if (['SCRIPT','STYLE','HEAD','BODY','HTML'].includes(el.tagName)) return false;
+                            const txt = (el.innerText || '').trim();
+                            if (!txt.toLowerCase().includes(ara)) return false;
+                            // Leaf node veya çok az çocuk
+                            const visKids = Array.from(el.children).filter(c => c.offsetParent);
+                            return visKids.length <= 2;
+                        }});
+
+                    if (adaylar.length === 0) return null;
+                    adaylar[0].click();
+                    return adaylar[0].innerText.trim().substring(0, 40);
+                }}
+            """)
+            if eslesen:
+                secildi = True
+                log.info(f"Şehir brute-force seçildi ({tip}): '{eslesen}'")
+        except Exception as be:
+            log.warning(f"Brute-force hatası ({tip}): {be}")
 
         if not secildi:
-            # ArrowDown → Enter (evrensel fallback)
+            # Son çare: ArrowDown + Enter
             sayfa.keyboard.press("ArrowDown")
             _bekle(0.4, 0.6)
             sayfa.keyboard.press("Enter")
-            log.info(f"Şehir ArrowDown+Enter ile seçildi ({tip})")
+            log.info(f"Şehir ArrowDown+Enter ({tip})")
 
         _bekle(0.5, 1)
         log.info(f"Şehir seçildi: {arama} ({iata}-{tip})")
