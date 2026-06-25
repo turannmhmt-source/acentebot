@@ -128,27 +128,26 @@ def pegasus_giris_baslat(tarayici) -> tuple:
             sayfa.wait_for_selector("input[name='OTP_INPUT']", state="visible", timeout=15000)
             log.info("OTP ekranı açıldı ✅")
 
-        # SMS Gönder — JS ile tüm elementleri tara
+        # SMS Gönder — tüm DOM elementlerini tara
         try:
-            tiklandi = sayfa.evaluate("""
+            sonuc = sayfa.evaluate("""
                 () => {
-                    const elems = Array.from(document.querySelectorAll(
-                        'button, input[type=submit], input[type=button], a'
-                    ));
-                    for (const el of elems) {
-                        const t = (el.textContent || el.value || '').trim();
-                        if (t.includes('SMS') && t.includes('nder')) {
-                            el.click(); return true;
+                    const tum = Array.from(document.querySelectorAll('*'));
+                    for (const el of tum) {
+                        const metin = (el.innerText || el.textContent || el.value || '').trim();
+                        if (metin.includes('SMS') && metin.length < 30) {
+                            el.click();
+                            return metin;
                         }
                     }
-                    return false;
+                    return null;
                 }
             """)
-            if tiklandi:
-                log.info("SMS Gönder tıklandı ✅ (JS)")
-                _bekle(2, 3)
+            if sonuc:
+                log.info(f"SMS Gönder tıklandı ✅: '{sonuc}'")
+                _bekle(3, 4)
             else:
-                log.warning("SMS Gönder bulunamadı, devam ediliyor")
+                log.warning("SMS Gönder elementi bulunamadı")
         except Exception as e:
             log.warning(f"SMS butonu: {e}")
 
