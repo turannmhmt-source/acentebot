@@ -128,28 +128,52 @@ def pegasus_giris_baslat(tarayici) -> tuple:
             sayfa.wait_for_selector("input[name='OTP_INPUT']", state="visible", timeout=15000)
             log.info("OTP ekranı açıldı ✅")
 
-        # SMS Gönder — tüm DOM elementlerini tara
+        # SMS Gönder — diagnostic + tıklama
         try:
-            sonuc = sayfa.evaluate("""
+            # Hangi elementler "SMS" içeriyor, logla
+            bilgi = sayfa.evaluate("""
                 () => {
-                    const tum = Array.from(document.querySelectorAll('*'));
-                    for (const el of tum) {
-                        const metin = (el.innerText || el.textContent || el.value || '').trim();
-                        if (metin.includes('SMS') && metin.length < 30) {
-                            el.click();
-                            return metin;
+                    const sonuclar = [];
+                    document.querySelectorAll('*').forEach(el => {
+                        const kendi = (el.childElementCount === 0)
+                            ? (el.innerText || el.textContent || el.value || '').trim()
+                            : '';
+                        if (kendi.includes('SMS') && kendi.length < 40) {
+                            sonuclar.push(el.tagName + '|' + el.className + '|' + kendi);
                         }
-                    }
-                    return null;
+                    });
+                    return sonuclar;
                 }
             """)
-            if sonuc:
-                log.info(f"SMS Gönder tıklandı ✅: '{sonuc}'")
-                _bekle(3, 4)
-            else:
-                log.warning("SMS Gönder elementi bulunamadı")
+            log.info(f"SMS elementi adayları: {bilgi}")
         except Exception as e:
-            log.warning(f"SMS butonu: {e}")
+            log.warning(f"SMS diagnostic: {e}")
+
+        # Frame'lerde de ara
+        try:
+            for frame in sayfa.frames:
+                try:
+                    tiklandi = frame.evaluate("""
+                        () => {
+                            const all = Array.from(document.querySelectorAll('*'));
+                            for (const el of all) {
+                                const t = (el.innerText || el.textContent || el.value || '').trim();
+                                if (t === 'SMS Gönder' || (t.includes('SMS') && t.includes('nder') && t.length < 20)) {
+                                    el.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+                                    return t;
+                                }
+                            }
+                            return null;
+                        }
+                    """)
+                    if tiklandi:
+                        log.info(f"SMS Gönder frame'de tıklandı ✅: '{tiklandi}'")
+                        _bekle(3, 4)
+                        break
+                except Exception:
+                    continue
+        except Exception as e:
+            log.warning(f"Frame SMS: {e}")
 
         _ss(sayfa, "03_sms_gonderildi")
         log.info("SMS gönderildi — OTP bekleniyor")
