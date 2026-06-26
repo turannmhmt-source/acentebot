@@ -313,16 +313,20 @@ def _sehir_sec(sayfa, iata: str, tip: str):
         except Exception as e:
             log.warning(f"Klavye hatası ({tip}): {e}")
 
-    # 3. Hidden DEPPORT/ARRPORT — her koşulda IATA kodunu yaz
+    # 3. Hidden DEPPORT/ARRPORT — React change event ile set et
     try:
+        sayfa.evaluate(f"""
+            () => {{
+                var h = document.querySelector("input[name='{hidden_name}']");
+                if (!h) return;
+                var setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                setter.call(h, '{iata}');
+                h.dispatchEvent(new Event('input', {{bubbles: true}}));
+                h.dispatchEvent(new Event('change', {{bubbles: true}}));
+            }}
+        """)
         mevcut = sayfa.input_value(f"input[name='{hidden_name}']")
-        if not mevcut:
-            sayfa.evaluate(
-                f"() => {{ var h = document.querySelector(\"input[name='{hidden_name}']\"); if(h) h.value='{iata}'; }}"
-            )
-            log.info(f"{hidden_name}='{iata}' JS ile set edildi ✅")
-        else:
-            log.info(f"{hidden_name}='{mevcut}' (zaten dolu)")
+        log.info(f"{hidden_name}='{mevcut}' set edildi ✅")
     except Exception as ex:
         log.warning(f"Hidden set hatası ({tip}): {ex}")
 
@@ -358,6 +362,44 @@ def _yolcu_sec(sayfa, yetiskin: int, cocuk: int, bebek: int):
 
 
 def _ara_tikla(sayfa):
+    # Form tanısı — ne var görelim
+    try:
+        bilgi = sayfa.evaluate("""
+            () => {
+                var inp = document.querySelector("input[name='LAB_DEPPORT']");
+                if (!inp) return 'LAB_DEPPORT yok';
+                var frm = inp.closest('form');
+                if (!frm) return 'form yok';
+                var els = Array.from(frm.querySelectorAll('button,input[type=submit],input[type=button]'));
+                return 'butonlar:' + els.map(e => (e.tagName+':'+((e.innerText||e.value||'').trim().slice(0,20))+':gorunur='+!!e.offsetParent)).join(' | ');
+            }
+        """)
+        log.info(f"Form tanı: {bilgi}")
+    except Exception:
+        pass
+
+    # Playwright ile gerçek tıklama — React onClick tetiklenir
+    for sel in [
+        "input[type='submit']",
+        "button[type='submit']",
+        "button:has-text('Ara')",
+        "a:has-text('Ara')",
+        "button:has-text('ARA')",
+        "input[value='Ara']",
+        "input[value='ARA']",
+        "input[value='Search']",
+    ]:
+        try:
+            el = sayfa.locator(sel).first
+            if el.is_visible(timeout=1500):
+                el.click(timeout=3000)
+                log.info(f"Ara tıklandı: {sel}")
+                return
+        except Exception:
+            continue
+
+    # Son çare: form içindeki ilk görünür submit/button'u JS click
+    log.warning("Ara butonu Playwright ile bulunamadı, JS deneniyor")
     try:
         sonuc = sayfa.evaluate("""
             () => {
@@ -365,20 +407,16 @@ def _ara_tikla(sayfa):
                 if (!inp) return 'LAB_DEPPORT yok';
                 var frm = inp.closest('form');
                 if (!frm) return 'form yok';
-                var sub = frm.querySelector('input[type=submit]');
-                if (sub && sub.offsetParent) { sub.click(); return 'input[submit]:' + sub.value; }
-                var els = frm.querySelectorAll('button,a');
-                for (var i=0; i<els.length; i++) {
-                    var v = (els[i].innerText||'').trim();
-                    if (v === 'Ara' && els[i].offsetParent) { els[i].click(); return 'btn:' + v; }
+                var subs = Array.from(frm.querySelectorAll('button[type=submit],input[type=submit],button'));
+                for (var s of subs) {
+                    if (s.offsetParent) { s.click(); return 'JS:' + (s.innerText||s.value||s.tagName); }
                 }
-                frm.submit();
-                return 'form.submit';
+                return 'tiklayacak eleman yok';
             }
         """)
-        log.info(f"Ara: {sonuc}")
+        log.info(f"Ara JS: {sonuc}")
     except Exception as e:
-        log.warning(f"Ara hatası: {e}")
+        log.warning(f"Ara JS hatası: {e}")
 
 
 def _sonuclari_oku(sayfa, nereden, nereye, direkt, cfg) -> list:
