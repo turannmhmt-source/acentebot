@@ -225,17 +225,24 @@ def pegasus_ucus_sorgula(sayfa, komut: dict) -> list:
             except Exception:
                 pass
 
-        # Sonuç sayfasını bekle
+        # Sonuç sayfasını bekle — networkidle yeterli
+        _w(3, 5)
         try:
-            sayfa.wait_for_url("**/MemberRezvResults**", timeout=45000)
+            sayfa.wait_for_load_state("networkidle", timeout=60000)
         except Exception:
+            pass
+        _w(2, 3)
+
+        log.info(f"Sonuç URL: {sayfa.url}")
+        _ss(sayfa, "07_sonuc")
+
+        if "Error.jsp" in sayfa.url or "error" in sayfa.url.lower():
             try:
-                sayfa.wait_for_load_state("networkidle", timeout=30000)
+                log.error(f"Hata sayfası içeriği: {sayfa.inner_text('body')[:400]}")
             except Exception:
                 pass
+            return []
 
-        _w(2, 4)
-        _ss(sayfa, "07_sonuc")
         return _sonuclari_oku(sayfa, nereden, nereye, direkt, cfg)
 
     except Exception as e:
