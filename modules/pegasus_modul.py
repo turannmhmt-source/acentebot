@@ -362,61 +362,44 @@ def _yolcu_sec(sayfa, yetiskin: int, cocuk: int, bebek: int):
 
 
 def _ara_tikla(sayfa):
-    # Form tanısı — ne var görelim
-    try:
-        bilgi = sayfa.evaluate("""
-            () => {
-                var inp = document.querySelector("input[name='LAB_DEPPORT']");
-                if (!inp) return 'LAB_DEPPORT yok';
-                var frm = inp.closest('form');
-                if (!frm) return 'form yok';
-                var els = Array.from(frm.querySelectorAll('button,input[type=submit],input[type=button]'));
-                return 'butonlar:' + els.map(e => (e.tagName+':'+((e.innerText||e.value||'').trim().slice(0,20))+':gorunur='+!!e.offsetParent)).join(' | ');
-            }
-        """)
-        log.info(f"Form tanı: {bilgi}")
-    except Exception:
-        pass
-
-    # Playwright ile gerçek tıklama — React onClick tetiklenir
-    for sel in [
-        "input[type='submit']",
-        "button[type='submit']",
-        "button:has-text('Ara')",
-        "a:has-text('Ara')",
-        "button:has-text('ARA')",
-        "input[value='Ara']",
-        "input[value='ARA']",
-        "input[value='Search']",
+    # Önce CarTrawler / araç kiralama popup varsa kapat
+    for kapat_sel in [
+        "button:has-text('Close')",
+        "button:has-text('Kapat')",
+        "[class*='modal'] button[class*='close']",
+        "[class*='popup'] button[class*='close']",
     ]:
         try:
-            el = sayfa.locator(sel).first
-            if el.is_visible(timeout=1500):
-                el.click(timeout=3000)
-                log.info(f"Ara tıklandı: {sel}")
-                return
+            el = sayfa.locator(kapat_sel).first
+            if el.is_visible(timeout=800):
+                el.click(timeout=2000)
+                _w(0.5, 1.0)
+                log.info(f"Popup kapatıldı: {kapat_sel}")
+                break
         except Exception:
             continue
 
-    # Son çare: form içindeki ilk görünür submit/button'u JS click
-    log.warning("Ara butonu Playwright ile bulunamadı, JS deneniyor")
+    # LAB_DEPPORT'un bulunduğu container'da CarTrawler DIŞI Ara butonu
     try:
         sonuc = sayfa.evaluate("""
             () => {
-                var inp = document.querySelector("input[name='LAB_DEPPORT']");
-                if (!inp) return 'LAB_DEPPORT yok';
-                var frm = inp.closest('form');
-                if (!frm) return 'form yok';
-                var subs = Array.from(frm.querySelectorAll('button[type=submit],input[type=submit],button'));
-                for (var s of subs) {
-                    if (s.offsetParent) { s.click(); return 'JS:' + (s.innerText||s.value||s.tagName); }
+                var tum = Array.from(document.querySelectorAll('button,input[type=submit],a'));
+                var adaylar = tum.filter(b => {
+                    if (!b.offsetParent) return false;
+                    if (b.closest('[class*="cartrawler"],[class*="CarTrawler"],[id*="cartrawler"],[class*="modal"],[class*="popup"],[class*="overlay"]')) return false;
+                    var txt = (b.innerText || b.value || '').trim();
+                    return txt === 'Ara' || txt === 'ARA' || b.type === 'submit';
+                });
+                if (adaylar.length > 0) {
+                    adaylar[0].click();
+                    return 'tiklandi:' + (adaylar[0].innerText || adaylar[0].value || adaylar[0].tagName).trim();
                 }
-                return 'tiklayacak eleman yok';
+                return 'buton bulunamadi';
             }
         """)
-        log.info(f"Ara JS: {sonuc}")
+        log.info(f"Ara: {sonuc}")
     except Exception as e:
-        log.warning(f"Ara JS hatası: {e}")
+        log.warning(f"Ara hatası: {e}")
 
 
 def _sonuclari_oku(sayfa, nereden, nereye, direkt, cfg) -> list:
